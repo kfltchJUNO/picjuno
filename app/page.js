@@ -182,7 +182,7 @@ export default function HomePage() {
                   type="text"
                   value={secretCode}
                   onChange={(e) => setSecretCode(e.target.value)}
-                  placeholder="예: Class24"
+                  placeholder="예: B4268"
                   className="w-full p-4 text-center text-lg border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none transition-all"
                 />
                 <button
