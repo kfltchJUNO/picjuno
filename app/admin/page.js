@@ -1,0 +1,373 @@
+'use client';
+
+import { useState, useEffect, useRef } from 'react';
+import { auth, db, storage } from '../../lib/firebase';
+import { signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import Draggable from 'react-draggable';
+
+export default function AdminPage() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // 로그인 상태
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
+  // 앨범 설정 상태
+  const [albumTitle, setAlbumTitle] = useState('');
+  const [isSecret, setIsSecret] = useState(false);
+  const [albumPassword, setAlbumPassword] = useState('');
+  const [files, setFiles] = useState([]);
+  const [previewUrl, setPreviewUrl] = useState(null); // 첫 번째 사진 미리보기
+  const [isUploading, setIsUploading] = useState(false);
+  const [shareData, setShareData] = useState(null);
+
+  // 워터마크 관련 상태
+  const [useWatermark, setUseWatermark] = useState(false);
+  const [wmText, setWmText] = useState('PicJuno');
+  const [wmColor, setWmColor] = useState('#ffffff');
+  const [wmSize, setWmSize] = useState(40);
+  const [wmOpacity, setWmOpacity] = useState(0.8);
+  const [wmPosition, setWmPosition] = useState({ x: 0, y: 0 }); // 화면상 좌표
+  const previewImgRef = useRef(null); // 미리보기 이미지 태그 참조
+
+  // 워터마크 프리셋 (LocalStorage에 저장)
+  const [presets, setPresets] = useState([]);
+
+  // 초기화 및 프리셋 불러오기
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setLoading(false);
+    });
+
+    // 저장된 프리셋 불러오기
+    const savedPresets = localStorage.getItem('wmPresets');
+    if (savedPresets) {
+      setPresets(JSON.parse(savedPresets));
+    }
+
+    return () => unsubscribe();
+  }, []);
+
+  // 로그인 핸들러
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (error) {
+      alert('로그인 실패: 정보를 확인하세요.');
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+  };
+
+  // 파일 선택 및 첫 번째 사진 미리보기 생성
+  const handleFileChange = (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const selectedFiles = Array.from(e.target.files);
+      setFiles(selectedFiles);
+      
+      // 첫 번째 파일로 미리보기 URL 생성
+      const firstFileUrl = URL.createObjectURL(selectedFiles[0]);
+      setPreviewUrl(firstFileUrl);
+    }
+  };
+
+  // 드래그 멈췄을 때 좌표 저장
+  const handleDragStop = (e, data) => {
+    setWmPosition({ x: data.x, y: data.y });
+  };
+
+  // 프리셋 저장
+  const savePreset = () => {
+    const name = prompt('현재 스타일을 저장할 이름을 입력하세요 (예: 흰색 기본)');
+    if (!name) return;
+    
+    const newPreset = { name, text: wmText, color: wmColor, size: wmSize, opacity: wmOpacity };
+    const updatedPresets = [...presets, newPreset];
+    setPresets(updatedPresets);
+    localStorage.setItem('wmPresets', JSON.stringify(updatedPresets));
+    alert('프리셋이 저장되었습니다!');
+  };
+
+  // 프리셋 적용
+  const applyPreset = (preset) => {
+    setWmText(preset.text);
+    setWmColor(preset.color);
+    setWmSize(preset.size);
+    setWmOpacity(preset.opacity);
+  };
+
+  // 프리셋 삭제
+  const deletePreset = (index) => {
+    if(!confirm('정말 삭제하시겠습니까?')) return;
+    const updated = presets.filter((_, i) => i !== index);
+    setPresets(updated);
+    localStorage.setItem('wmPresets', JSON.stringify(updated));
+  }
+
+  // [핵심] 캔버스를 이용해 이미지와 워터마크 합성
+  const processFileWithWatermark = async (file) => {
+    if (!useWatermark) return file; // 워터마크 안 쓰면 원본 반환
+
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.src = URL.createObjectURL(file);
+      
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // 원본 해상도대로 캔버스 크기 설정
+        canvas.width = img.width;
+        canvas.height = img.height;
+
+        // 1. 원본 사진 그리기
+        ctx.drawImage(img, 0, 0);
+
+        // 2. 워터마크 그리기 (비율 계산)
+        // 화면에 보이는 미리보기 이미지의 크기
+        const previewWidth = previewImgRef.current.offsetWidth;
+        // 비율 = 실제크기 / 미리보기크기
+        const scale = img.width / previewWidth;
+
+        ctx.font = `bold ${wmSize * scale}px sans-serif`;
+        ctx.fillStyle = wmColor;
+        ctx.globalAlpha = wmOpacity;
+        ctx.shadowColor = "rgba(0,0,0,0.5)";
+        ctx.shadowBlur = 10 * scale;
+        
+        // 드래그된 위치(x, y)에 비율을 곱해서 실제 위치 계산
+        // (y좌표는 글자 베이스라인 문제로 살짝 보정 + size만큼 내려줌)
+        ctx.fillText(wmText, wmPosition.x * scale, (wmPosition.y * scale) + (wmSize * scale));
+
+        // 3. 파일로 변환 (JPEG, 퀄리티 0.9)
+        canvas.toBlob((blob) => {
+          // 원본 파일명 유지하면서 blob을 파일 객체로 변환
+          const newFile = new File([blob], file.name, { type: 'image/jpeg' });
+          resolve(newFile);
+        }, 'image/jpeg', 0.90);
+      };
+    });
+  };
+
+  // 업로드 실행
+  const handleUpload = async (e) => {
+    e.preventDefault();
+    if (!albumTitle || files.length === 0) return alert('제목과 사진은 필수입니다.');
+    if (isSecret && !albumPassword) return alert('비밀번호를 설정해주세요.');
+
+    setIsUploading(true);
+
+    try {
+      // 모든 파일에 대해 워터마크 처리 (병렬 처리)
+      const processedFilesPromises = files.map(file => processFileWithWatermark(file));
+      const processedFiles = await Promise.all(processedFilesPromises);
+
+      // Firebase Storage 업로드
+      const uploadPromises = processedFiles.map(async (file) => {
+        const storageRef = ref(storage, `albums/${Date.now()}_${file.name}`);
+        await uploadBytes(storageRef, file);
+        return getDownloadURL(storageRef);
+      });
+
+      const photoUrls = await Promise.all(uploadPromises);
+
+      // Firestore 저장
+      await addDoc(collection(db, 'albums'), {
+        title: albumTitle,
+        isSecret: isSecret,
+        password: isSecret ? albumPassword : null,
+        photos: photoUrls,
+        createdAt: serverTimestamp(),
+      });
+
+      setShareData({
+        title: albumTitle,
+        password: isSecret ? albumPassword : null,
+        url: window.location.origin,
+      });
+
+      // 초기화
+      setFiles([]);
+      setPreviewUrl(null);
+      setAlbumTitle('');
+      alert('업로드 및 워터마크 처리가 완료되었습니다!');
+
+    } catch (error) {
+      console.error(error);
+      alert('업로드 중 오류 발생');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // UI 렌더링
+  if (loading) return <div className="p-10 text-center">Loading...</div>;
+  if (!user) return (
+    <div className="flex min-h-screen items-center justify-center bg-gray-100">
+        <form onSubmit={handleLogin} className="bg-white p-8 rounded shadow-md w-96">
+            <h2 className="text-xl font-bold mb-4">PicJuno 관리자</h2>
+            <input type="email" onChange={e=>setEmail(e.target.value)} placeholder="Email" className="w-full p-2 border mb-2" />
+            <input type="password" onChange={e=>setPassword(e.target.value)} placeholder="PW" className="w-full p-2 border mb-4" />
+            <button className="w-full bg-blue-600 text-white p-2 rounded">로그인</button>
+        </form>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-6">
+      <div className="max-w-4xl mx-auto bg-white p-8 rounded-xl shadow-lg">
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-3xl font-bold text-gray-800">📸 PicJuno 스튜디오</h1>
+          <button onClick={handleLogout} className="text-red-500 underline">로그아웃</button>
+        </div>
+
+        {shareData && (
+           <div className="mb-6 p-4 bg-green-100 text-green-800 rounded-lg text-center">
+             <p className="font-bold">🎉 업로드 완료!</p>
+             <button onClick={() => navigator.clipboard.writeText(`[PicJuno] 사진 도착!\n주소: ${shareData.url}\n${shareData.password ? `비번: ${shareData.password}` : ''}`).then(()=>alert('복사됨!'))} 
+                className="mt-2 bg-green-600 text-white px-4 py-1 rounded-full text-sm">
+               공유 텍스트 복사하기
+             </button>
+           </div>
+        )}
+
+        <form onSubmit={handleUpload} className="space-y-6">
+          {/* 기본 정보 입력 */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <input 
+              type="text" 
+              value={albumTitle} 
+              onChange={e => setAlbumTitle(e.target.value)} 
+              placeholder="앨범 제목 (예: 2026 졸업식)" 
+              className="p-3 border rounded w-full" 
+              required
+            />
+            <div className="flex items-center space-x-2 border p-3 rounded bg-gray-50">
+                <input type="checkbox" checked={isSecret} onChange={e => setIsSecret(e.target.checked)} className="w-5 h-5"/>
+                <span className="flex-1">비밀 폴더</span>
+                {isSecret && <input type="text" value={albumPassword} onChange={e => setAlbumPassword(e.target.value)} placeholder="비밀번호 8자리" className="border p-1 w-32 rounded"/>}
+            </div>
+          </div>
+
+          {/* 파일 선택 */}
+          <div className="border-2 border-dashed border-gray-300 p-6 rounded-lg text-center">
+            <input type="file" multiple accept="image/*" onChange={handleFileChange} className="hidden" id="fileInput"/>
+            <label htmlFor="fileInput" className="cursor-pointer text-blue-600 font-bold hover:underline">
+              {files.length > 0 ? `${files.length}장의 사진이 선택됨` : "+ 사진 추가하기 (Drag & Drop 가능)"}
+            </label>
+          </div>
+
+          {/* 워터마크 편집기 (사진이 있을 때만 표시) */}
+          {files.length > 0 && previewUrl && (
+            <div className="border rounded-lg p-4 bg-gray-50">
+              <div className="flex justify-between items-center mb-4">
+                <label className="flex items-center space-x-2 font-bold text-lg">
+                  <input type="checkbox" checked={useWatermark} onChange={e => setUseWatermark(e.target.checked)} className="w-5 h-5" />
+                  <span>워터마크 넣기</span>
+                </label>
+                
+                {/* 프리셋 관리 */}
+                {useWatermark && (
+                    <div className="flex space-x-2">
+                        <select onChange={(e) => e.target.value && applyPreset(JSON.parse(e.target.value))} className="p-1 border rounded text-sm">
+                            <option value="">-- 저장된 스타일 불러오기 --</option>
+                            {presets.map((p, i) => (
+                                <option key={i} value={JSON.stringify(p)}>{p.name}</option>
+                            ))}
+                        </select>
+                        <button type="button" onClick={savePreset} className="bg-gray-200 px-2 py-1 rounded text-sm">현재 스타일 저장</button>
+                    </div>
+                )}
+              </div>
+
+              {useWatermark && (
+                <div className="flex flex-col md:flex-row gap-6">
+                  {/* 왼쪽: 컨트롤 패널 */}
+                  <div className="w-full md:w-1/3 space-y-4">
+                    <div>
+                        <label className="text-xs text-gray-500">내용</label>
+                        <input type="text" value={wmText} onChange={e => setWmText(e.target.value)} className="w-full p-2 border rounded" />
+                    </div>
+                    <div className="flex gap-2">
+                        <div className="flex-1">
+                            <label className="text-xs text-gray-500">색상</label>
+                            <input type="color" value={wmColor} onChange={e => setWmColor(e.target.value)} className="w-full h-10 cursor-pointer" />
+                        </div>
+                        <div className="flex-1">
+                            <label className="text-xs text-gray-500">투명도 ({Math.round(wmOpacity*100)}%)</label>
+                            <input type="range" min="0.1" max="1" step="0.1" value={wmOpacity} onChange={e => setWmOpacity(parseFloat(e.target.value))} className="w-full" />
+                        </div>
+                    </div>
+                    <div>
+                        <label className="text-xs text-gray-500">크기 ({wmSize}px)</label>
+                        <input type="range" min="10" max="100" value={wmSize} onChange={e => setWmSize(parseInt(e.target.value))} className="w-full" />
+                    </div>
+                    
+                    {/* 저장된 프리셋 목록 삭제 UI */}
+                    {presets.length > 0 && (
+                        <div className="pt-4 border-t">
+                            <p className="text-xs text-gray-400 mb-2">저장된 스타일 관리</p>
+                            <div className="flex flex-wrap gap-2">
+                                {presets.map((p, i) => (
+                                    <span key={i} className="text-xs bg-white border px-2 py-1 rounded flex items-center">
+                                        {p.name}
+                                        <button type="button" onClick={()=>deletePreset(i)} className="ml-2 text-red-500">x</button>
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                  </div>
+
+                  {/* 오른쪽: 미리보기 및 드래그 영역 */}
+                  <div className="w-full md:w-2/3 relative border-2 border-blue-200 overflow-hidden bg-gray-200 select-none">
+                    <p className="absolute top-0 left-0 bg-blue-500 text-white text-xs px-2 py-1 z-10">미리보기 (드래그하여 위치 이동)</p>
+                    
+                    {/* 이미지 */}
+                    <img 
+                        ref={previewImgRef}
+                        src={previewUrl} 
+                        alt="Preview" 
+                        className="w-full h-auto pointer-events-none" // 이미지는 클릭/드래그 안되게
+                    />
+
+                    {/* 드래그 가능한 워터마크 */}
+                    <Draggable bounds="parent" onStop={handleDragStop} defaultPosition={{x: 0, y: 0}}>
+                      <div 
+                        className="absolute top-0 left-0 cursor-move font-bold whitespace-nowrap"
+                        style={{
+                            color: wmColor,
+                            fontSize: `${wmSize}px`, // 미리보기에서는 픽셀 그대로 (나중에 비율 계산)
+                            opacity: wmOpacity,
+                            textShadow: '2px 2px 4px rgba(0,0,0,0.5)',
+                            zIndex: 20
+                        }}
+                      >
+                        {wmText}
+                      </div>
+                    </Draggable>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={isUploading}
+            className={`w-full py-4 rounded-lg text-white font-bold text-lg shadow-md ${isUploading ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'}`}
+          >
+            {isUploading ? '워터마크 처리 및 업로드 중... ⏳' : '업로드 시작 🚀'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
