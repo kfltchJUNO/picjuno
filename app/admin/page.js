@@ -21,10 +21,14 @@ export default function AdminPage() {
   
   const [files, setFiles] = useState([]); 
   const [previewUrl, setPreviewUrl] = useState(null); 
-  
   const [isUploading, setIsUploading] = useState(false);
   const [shareData, setShareData] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  // ★ 기존 앨범에 사진을 추가하기 위한 전용 상태들
+  const [appendFiles, setAppendFiles] = useState([]);
+  const [isAppendDragging, setIsAppendDragging] = useState(false);
+  const [isAppending, setIsAppending] = useState(false);
 
   const [useWatermark, setUseWatermark] = useState(false);
   const [wmText, setWmText] = useState('Picturewrite by Juno.');
@@ -57,6 +61,7 @@ export default function AdminPage() {
       if (adminTab === 'manage') {
         fetchAlbumsList();
         setSelectedAlbum(null);
+        setAppendFiles([]); // 관리탭 이동 시 추가 장바구니 초기화
       } else if (adminTab === 'settings') {
         fetchSettings();
       }
@@ -98,7 +103,7 @@ export default function AdminPage() {
     setIsSavingSettings(true);
     try {
       await setDoc(doc(db, 'settings', 'general'), { subtitle: siteSubtitle }, { merge: true });
-      alert('앱 설정이 성공적으로 저장되었습니다! 메인 화면에 즉시 반영됩니다.');
+      alert('앱 설정이 성공적으로 저장되었습니다!');
     } catch (error) {
       console.error("Error saving settings:", error);
       alert('설정 저장 중 오류가 발생했습니다.');
@@ -116,11 +121,12 @@ export default function AdminPage() {
     }
   };
 
-  const handleDeleteAlbum = async (albumId, photoUrls) => {
+  const handleDeleteAlbum = async (albumId, photoArray) => {
     if (!confirm('경고: 이 앨범과 내부의 모든 사진 파일이 영구적으로 삭제됩니다. 계속하시겠습니까?')) return;
     try {
-      if (photoUrls && photoUrls.length > 0) {
-        const deletePromises = photoUrls.map((url) => {
+      if (photoArray && photoArray.length > 0) {
+        const deletePromises = photoArray.map((p) => {
+          const url = typeof p === 'string' ? p : p.url;
           const fileRef = ref(storage, url);
           return deleteObject(fileRef).catch(e => console.log('File already deleted', e));
         });
@@ -135,12 +141,17 @@ export default function AdminPage() {
     }
   };
 
-  const handleDeletePhoto = async (albumId, photoUrl, currentPhotos) => {
+  const handleDeletePhoto = async (albumId, photoUrl, photoId, currentPhotos) => {
     if (!confirm('이 사진을 파이어베이스에서 영구 삭제하시겠습니까?')) return;
     try {
       const fileRef = ref(storage, photoUrl);
       await deleteObject(fileRef).catch(e => console.log('File already deleted', e));
-      const updatedPhotos = currentPhotos.filter(url => url !== photoUrl);
+      
+      const updatedPhotos = currentPhotos.filter(p => {
+        const pId = typeof p === 'string' ? p : p.id;
+        return pId !== photoId;
+      });
+
       await updateDoc(doc(db, 'albums', albumId), { photos: updatedPhotos });
       alert('사진이 삭제되었습니다.');
       setSelectedAlbum(prev => ({ ...prev, photos: updatedPhotos }));
@@ -157,11 +168,79 @@ export default function AdminPage() {
     if (album.isSecret) {
       text += `\n🔒 비번: ${album.password}`;
     }
-    navigator.clipboard.writeText(text).then(() => {
-      alert('링크와 코드가 클립보드에 복사되었습니다!');
-    });
+    navigator.clipboard.writeText(text).then(() => alert('링크와 코드가 클립보드에 복사되었습니다!'));
   };
 
+  const generateRandomPassword = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let randomPassword = '';
+    for (let i = 0; i < 6; i++) {
+      randomPassword += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setAlbumPassword(randomPassword);
+  };
+
+  // --- 기존 앨범 사진 추가(Append) 업로드 로직 ---
+  const handleAppendFileChange = (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      setAppendFiles(prev => [...prev, ...Array.from(e.target.files)]);
+    }
+  };
+  const handleAppendDragOver = (e) => { e.preventDefault(); setIsAppendDragging(true); };
+  const handleAppendDragLeave = (e) => { e.preventDefault(); setIsAppendDragging(false); };
+  const handleAppendDrop = (e) => {
+    e.preventDefault(); setIsAppendDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      setAppendFiles(prev => [...prev, ...Array.from(e.dataTransfer.files)]);
+    }
+  };
+  const handleRemoveAppendFile = (indexToRemove) => {
+    setAppendFiles(prev => prev.filter((_, idx) => idx !== indexToRemove));
+  };
+
+  const handleAppendUpload = async () => {
+    if (appendFiles.length === 0) return;
+    setIsAppending(true);
+    try {
+      const processedFilesPromises = appendFiles.map(file => processFileWithWatermark(file));
+      const processedFiles = await Promise.all(processedFilesPromises);
+      
+      const uploadPromises = processedFiles.map(async (file) => {
+        const storageRef = ref(storage, `albums/${Date.now()}_${file.name}`);
+        await uploadBytes(storageRef, file);
+        return getDownloadURL(storageRef);
+      });
+      
+      const newUrls = await Promise.all(uploadPromises);
+      // 추가되는 사진도 '객체' 형태로 저장 (하트 수 0)
+      const newPhotoObjects = newUrls.map(url => ({
+        id: Date.now().toString() + Math.random().toString(36).substring(2, 8),
+        url: url,
+        likes: 0,
+        addedAt: Date.now()
+      }));
+
+      const docRef = doc(db, 'albums', selectedAlbum.id);
+      const docSnap = await getDoc(docRef);
+      
+      if(docSnap.exists()){
+         const currentDbPhotos = docSnap.data().photos || [];
+         const combinedPhotos = [...currentDbPhotos, ...newPhotoObjects];
+         await updateDoc(docRef, { photos: combinedPhotos });
+         
+         setSelectedAlbum(prev => ({ ...prev, photos: combinedPhotos }));
+         setAppendFiles([]);
+         alert('사진이 성공적으로 추가되었습니다!');
+         fetchAlbumsList();
+      }
+    } catch (error) {
+      console.error(error); alert('추가 업로드 실패');
+    } finally {
+      setIsAppending(false);
+    }
+  };
+
+  // --- 새 앨범 업로드 로직 ---
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files.length > 0) processSelectedFiles(e.target.files);
   };
@@ -171,24 +250,12 @@ export default function AdminPage() {
     e.preventDefault(); setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) processSelectedFiles(e.dataTransfer.files);
   };
-  
   const processSelectedFiles = (fileList) => {
     const newFiles = Array.from(fileList);
     setFiles(prevFiles => [...prevFiles, ...newFiles]);
   };
-
   const handleRemovePendingFile = (indexToRemove) => {
     setFiles(prevFiles => prevFiles.filter((_, index) => index !== indexToRemove));
-  };
-
-  // ★ 추가된 기능: 대소문자+숫자 랜덤 비밀번호 6자리 생성
-  const generateRandomPassword = () => {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let randomPassword = '';
-    for (let i = 0; i < 6; i++) {
-      randomPassword += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    setAlbumPassword(randomPassword);
   };
 
   const handleDragStop = (e, data) => setWmPosition({ x: data.x, y: data.y });
@@ -220,7 +287,7 @@ export default function AdminPage() {
         const ctx = canvas.getContext('2d');
         canvas.width = img.width; canvas.height = img.height;
         ctx.drawImage(img, 0, 0);
-        const previewWidth = previewImgRef.current.offsetWidth;
+        const previewWidth = previewImgRef.current.offsetWidth || 300;
         const scale = img.width / previewWidth;
         ctx.font = `bold ${wmSize * scale}px sans-serif`;
         ctx.fillStyle = wmColor; ctx.globalAlpha = wmOpacity;
@@ -247,18 +314,25 @@ export default function AdminPage() {
         return getDownloadURL(storageRef);
       });
       const photoUrls = await Promise.all(uploadPromises);
+      
+      // ★ 신규 업로드 시 사진을 단순 문자열이 아닌 '객체(하트 수 포함)'로 저장
+      const photoObjects = photoUrls.map(url => ({
+        id: Date.now().toString() + Math.random().toString(36).substring(2, 8),
+        url: url,
+        likes: 0,
+        addedAt: Date.now()
+      }));
+
       const docRef = await addDoc(collection(db, 'albums'), {
         title: albumTitle,
         isSecret: isSecret,
         password: isSecret ? albumPassword : null,
-        photos: photoUrls,
+        photos: photoObjects, 
         createdAt: serverTimestamp(),
       });
       setShareData({ id: docRef.id, title: albumTitle, password: isSecret ? albumPassword : null, url: window.location.origin });
       
-      setFiles([]); 
-      setAlbumTitle('');
-      setAlbumPassword('');
+      setFiles([]); setAlbumTitle(''); setAlbumPassword('');
       alert('완료되었습니다!');
     } catch (error) {
       console.error(error); alert('업로드 실패');
@@ -292,26 +366,12 @@ export default function AdminPage() {
         </div>
 
         <div className="flex flex-wrap gap-2 mb-8 bg-gray-100 p-1 rounded-lg w-fit">
-          <button 
-            onClick={() => setAdminTab('upload')} 
-            className={`px-4 py-2 rounded-md font-bold transition-all ${adminTab === 'upload' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-          >
-            새 사진 업로드
-          </button>
-          <button 
-            onClick={() => setAdminTab('manage')} 
-            className={`px-4 py-2 rounded-md font-bold transition-all ${adminTab === 'manage' ? 'bg-white shadow text-red-600' : 'text-gray-500 hover:text-gray-700'}`}
-          >
-            앨범 관리 및 삭제
-          </button>
-          <button 
-            onClick={() => setAdminTab('settings')} 
-            className={`px-4 py-2 rounded-md font-bold transition-all ${adminTab === 'settings' ? 'bg-white shadow text-purple-600' : 'text-gray-500 hover:text-gray-700'}`}
-          >
-            앱 기본 설정
-          </button>
+          <button onClick={() => setAdminTab('upload')} className={`px-4 py-2 rounded-md font-bold transition-all ${adminTab === 'upload' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}>새 사진 업로드</button>
+          <button onClick={() => setAdminTab('manage')} className={`px-4 py-2 rounded-md font-bold transition-all ${adminTab === 'manage' ? 'bg-white shadow text-red-600' : 'text-gray-500 hover:text-gray-700'}`}>앨범 관리 및 추가</button>
+          <button onClick={() => setAdminTab('settings')} className={`px-4 py-2 rounded-md font-bold transition-all ${adminTab === 'settings' ? 'bg-white shadow text-purple-600' : 'text-gray-500 hover:text-gray-700'}`}>앱 기본 설정</button>
         </div>
 
+        {/* ==================== 1. 업로드 탭 ==================== */}
         {adminTab === 'upload' && (
           <div className="animate-fade-in">
              {shareData && (
@@ -327,8 +387,6 @@ export default function AdminPage() {
             <form onSubmit={handleUpload} className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <input type="text" value={albumTitle} onChange={e => setAlbumTitle(e.target.value)} placeholder="앨범 제목 (예: 2026 졸업식)" className="p-3 border border-gray-300 rounded-lg w-full focus:ring-2 focus:ring-blue-500 outline-none" required />
-                
-                {/* ★ 이 부분이 수정되었습니다: 비밀 폴더 체크 시 비밀번호 입력 및 랜덤 생성 버튼 표시 */}
                 <div className="flex flex-col sm:flex-row sm:items-center space-y-2 sm:space-y-0 sm:space-x-2 border border-gray-300 p-3 rounded-lg bg-gray-50">
                   <div className="flex items-center space-x-2">
                     <input type="checkbox" checked={isSecret} onChange={e => setIsSecret(e.target.checked)} className="w-5 h-5 text-blue-600"/>
@@ -336,39 +394,18 @@ export default function AdminPage() {
                   </div>
                   {isSecret && (
                     <div className="flex items-center flex-1 w-full gap-2">
-                      <input 
-                        type="text" 
-                        value={albumPassword} 
-                        onChange={e => setAlbumPassword(e.target.value)} 
-                        placeholder="비밀번호 입력" 
-                        className="border p-2 w-full rounded text-sm outline-none focus:border-blue-500"
-                      />
-                      <button 
-                        type="button" 
-                        onClick={generateRandomPassword}
-                        className="bg-gray-200 text-gray-700 px-3 py-2 rounded text-xs font-bold hover:bg-gray-300 transition-colors whitespace-nowrap"
-                        title="무작위 비밀번호 자동 생성"
-                      >
-                        랜덤 🎲
-                      </button>
+                      <input type="text" value={albumPassword} onChange={e => setAlbumPassword(e.target.value)} placeholder="비밀번호 입력" className="border p-2 w-full rounded text-sm outline-none focus:border-blue-500"/>
+                      <button type="button" onClick={generateRandomPassword} className="bg-gray-200 text-gray-700 px-3 py-2 rounded text-xs font-bold hover:bg-gray-300 transition-colors whitespace-nowrap" title="무작위 비밀번호 자동 생성">랜덤 🎲</button>
                     </div>
                   )}
                 </div>
               </div>
 
-              <div 
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-                className={`border-2 border-dashed p-8 rounded-lg text-center transition-colors 
-                  ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:bg-gray-50'}`}
-              >
+              <div onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} className={`border-2 border-dashed p-8 rounded-lg text-center transition-colors ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:bg-gray-50'}`}>
                 <input type="file" multiple accept="image/*" onChange={handleFileChange} className="hidden" id="fileInput"/>
                 <label htmlFor="fileInput" className="cursor-pointer flex flex-col items-center justify-center w-full h-full">
                   <span className="text-4xl mb-2">📷</span>
-                  <span className="text-blue-600 font-bold hover:underline text-lg">
-                    {files.length > 0 ? `현재 ${files.length}장 선택됨 (클릭하여 추가)` : "+ 사진 추가하기 (Drag & Drop)"}
-                  </span>
+                  <span className="text-blue-600 font-bold hover:underline text-lg">{files.length > 0 ? `현재 ${files.length}장 선택됨 (클릭하여 추가)` : "+ 사진 추가하기 (Drag & Drop)"}</span>
                   <span className="text-sm text-gray-400 mt-2">여러 번에 나누어 사진을 계속 추가할 수 있습니다.</span>
                 </label>
               </div>
@@ -377,30 +414,13 @@ export default function AdminPage() {
                 <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
                   <div className="flex justify-between items-end mb-3">
                     <h3 className="font-bold text-gray-700">📸 선택된 사진 ({files.length}장)</h3>
-                    <button 
-                      type="button" 
-                      onClick={() => setFiles([])} 
-                      className="text-sm text-red-500 hover:text-red-700 underline"
-                    >
-                      전체 비우기
-                    </button>
+                    <button type="button" onClick={() => setFiles([])} className="text-sm text-red-500 hover:text-red-700 underline">전체 비우기</button>
                   </div>
                   <div className="flex flex-wrap gap-3 max-h-64 overflow-y-auto p-2 bg-white rounded border border-gray-100 shadow-inner">
                     {files.map((file, index) => (
                       <div key={index} className="relative w-20 h-20 group rounded-md overflow-hidden border border-gray-200 shadow-sm">
-                        <img 
-                          src={URL.createObjectURL(file)} 
-                          alt={`preview-${index}`} 
-                          className="w-full h-full object-cover" 
-                        />
-                        <button 
-                          type="button"
-                          onClick={() => handleRemovePendingFile(index)}
-                          className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 shadow-md"
-                          title="이 사진 빼기"
-                        >
-                          ✕
-                        </button>
+                        <img src={URL.createObjectURL(file)} alt={`preview-${index}`} className="w-full h-full object-cover" />
+                        <button type="button" onClick={() => handleRemovePendingFile(index)} className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 shadow-md" title="이 사진 빼기">✕</button>
                       </div>
                     ))}
                   </div>
@@ -439,9 +459,7 @@ export default function AdminPage() {
                       <div className="w-full md:w-2/3 relative border-2 border-blue-200 overflow-hidden bg-gray-100 select-none rounded-lg">
                         <img ref={previewImgRef} src={previewUrl} alt="Preview" className="w-full h-auto pointer-events-none block" />
                         <Draggable nodeRef={draggableRef} bounds="parent" onStop={handleDragStop} defaultPosition={{x: 0, y: 0}}>
-                          <div 
-                            ref={draggableRef}
-                            className="absolute top-0 left-0 cursor-move font-bold whitespace-nowrap p-2 border-2 border-transparent hover:border-dashed hover:border-white/50"
+                          <div ref={draggableRef} className="absolute top-0 left-0 cursor-move font-bold whitespace-nowrap p-2 border-2 border-transparent hover:border-dashed hover:border-white/50"
                             style={{ color: wmColor, fontSize: `${wmSize}px`, opacity: wmOpacity, textShadow: '2px 2px 4px rgba(0,0,0,0.5)', zIndex: 20 }}>
                             {wmText}
                           </div>
@@ -458,7 +476,7 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* ==================== 2. 관리/삭제 탭 ==================== */}
+        {/* ==================== 2. 관리/삭제/추가 탭 ==================== */}
         {adminTab === 'manage' && (
           <div className="animate-fade-in">
             {selectedAlbum ? (
@@ -467,31 +485,73 @@ export default function AdminPage() {
                   <button onClick={() => setSelectedAlbum(null)} className="text-gray-500 hover:text-black font-bold flex items-center">
                     ← 앨범 목록으로
                   </button>
-                  <h2 className="text-lg font-bold">{selectedAlbum.title} (총 {selectedAlbum.photos.length}장)</h2>
+                  <h2 className="text-lg font-bold">{selectedAlbum.title} (총 {selectedAlbum.photos?.length || 0}장)</h2>
                 </div>
-                {selectedAlbum.photos.length === 0 ? (
+
+                {/* ★ 선택된 앨범에 사진 덧붙이기 구역 */}
+                <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                  <h3 className="font-bold text-blue-800 mb-3">➕ 이 앨범에 사진 더 추가하기</h3>
+                  
+                  <div onDragOver={handleAppendDragOver} onDragLeave={handleAppendDragLeave} onDrop={handleAppendDrop} className={`border-2 border-dashed p-6 rounded-lg text-center bg-white transition-colors cursor-pointer ${isAppendDragging ? 'border-blue-500 bg-blue-100' : 'border-blue-300 hover:bg-gray-50'}`}>
+                    <input type="file" multiple accept="image/*" onChange={handleAppendFileChange} className="hidden" id="appendFileInput"/>
+                    <label htmlFor="appendFileInput" className="cursor-pointer flex flex-col items-center justify-center w-full h-full">
+                      <span className="text-blue-600 font-bold hover:underline">
+                        {appendFiles.length > 0 ? `현재 ${appendFiles.length}장 추가 선택됨` : "클릭하거나 드래그하여 사진 추가"}
+                      </span>
+                    </label>
+                  </div>
+
+                  {appendFiles.length > 0 && (
+                    <div className="mt-4">
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {appendFiles.map((file, idx) => (
+                          <div key={idx} className="relative w-16 h-16 group rounded overflow-hidden border">
+                            <img src={URL.createObjectURL(file)} alt="preview" className="w-full h-full object-cover" />
+                            <button type="button" onClick={() => handleRemoveAppendFile(idx)} className="absolute top-0 right-0 bg-red-500 text-white text-xs w-5 h-5 opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={handleAppendUpload} disabled={isAppending} className={`w-full py-2 rounded text-white font-bold ${isAppending ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                        {isAppending ? '추가 업로드 중...' : `${appendFiles.length}장 앨범에 등록하기 🚀`}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* 기존 사진 목록 및 삭제 */}
+                {!selectedAlbum.photos || selectedAlbum.photos.length === 0 ? (
                   <p className="text-center py-10 text-gray-400">사진이 없습니다.</p>
                 ) : (
                   <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
-                    {selectedAlbum.photos.map((url, idx) => (
-                      <div key={idx} className="relative aspect-square group rounded-lg overflow-hidden border border-gray-200">
-                        <img src={url} alt={`photo-${idx}`} className="w-full h-full object-cover" />
-                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                           <button 
-                             onClick={() => handleDeletePhoto(selectedAlbum.id, url, selectedAlbum.photos)}
-                             className="bg-red-600 text-white p-2 rounded-full hover:bg-red-700 shadow-lg text-sm font-bold"
-                           >
-                             🗑️ 삭제
-                           </button>
+                    {selectedAlbum.photos.map((photo, idx) => {
+                      // ★ 호환성 처리: photo가 문자열이면 그대로 쓰고, 객체면 url을 씁니다.
+                      const url = typeof photo === 'string' ? photo : photo.url;
+                      const id = typeof photo === 'string' ? photo : photo.id;
+                      const likes = typeof photo === 'string' ? 0 : (photo.likes || 0);
+
+                      return (
+                        <div key={id || idx} className="relative aspect-square group rounded-lg overflow-hidden border border-gray-200">
+                          <img src={url} alt={`photo-${idx}`} className="w-full h-full object-cover" />
+                          <div className="absolute top-1 left-1 bg-black/60 text-white text-xs px-2 py-0.5 rounded-full font-bold">
+                            ❤️ {likes}
+                          </div>
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                             <button 
+                               onClick={() => handleDeletePhoto(selectedAlbum.id, url, id, selectedAlbum.photos)}
+                               className="bg-red-600 text-white p-2 rounded-full hover:bg-red-700 shadow-lg text-sm font-bold"
+                             >
+                               🗑️ 삭제
+                             </button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
             ) : (
               <div className="space-y-4">
-                <p className="text-sm text-gray-500 mb-4">앨범을 완전히 삭제하거나, 개별 사진을 지울 수 있습니다.</p>
+                <p className="text-sm text-gray-500 mb-4">앨범을 완전히 삭제하거나, 앨범 안으로 들어가 사진을 추가/삭제할 수 있습니다.</p>
                 {albumsList.length === 0 ? (
                   <p className="text-center py-10 text-gray-400">등록된 앨범이 없습니다.</p>
                 ) : (
@@ -500,7 +560,7 @@ export default function AdminPage() {
                       <div className="flex items-center space-x-4">
                         <div className="w-16 h-16 bg-gray-200 rounded-lg overflow-hidden shrink-0">
                           {album.photos && album.photos[0] ? (
-                            <img src={album.photos[0]} alt="thumbnail" className="w-full h-full object-cover" />
+                            <img src={typeof album.photos[0] === 'string' ? album.photos[0] : album.photos[0].url} alt="thumbnail" className="w-full h-full object-cover" />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">Empty</div>
                           )}
@@ -518,23 +578,14 @@ export default function AdminPage() {
                       </div>
                       
                       <div className="flex flex-wrap gap-2 shrink-0">
-                        <button 
-                          onClick={() => handleCopyLink(album)}
-                          className="px-3 py-1 bg-green-100 text-green-700 border border-green-200 text-sm font-bold rounded hover:bg-green-200 transition-colors"
-                        >
+                        <button onClick={() => handleCopyLink(album)} className="px-3 py-1 bg-green-100 text-green-700 border border-green-200 text-sm font-bold rounded hover:bg-green-200 transition-colors">
                           {album.isSecret ? '🔗 링크/비번 복사' : '🔗 링크 복사'}
                         </button>
-                        <button 
-                          onClick={() => setSelectedAlbum(album)}
-                          className="px-3 py-1 bg-white border border-gray-300 text-sm font-bold rounded hover:bg-gray-100 transition-colors"
-                        >
-                          사진 관리
+                        <button onClick={() => setSelectedAlbum(album)} className="px-3 py-1 bg-white border border-blue-300 text-blue-600 text-sm font-bold rounded hover:bg-blue-50 transition-colors">
+                          사진 추가 및 관리
                         </button>
-                        <button 
-                          onClick={() => handleDeleteAlbum(album.id, album.photos)}
-                          className="px-3 py-1 bg-red-100 text-red-600 border border-red-200 text-sm font-bold rounded hover:bg-red-200 transition-colors"
-                        >
-                          앨범 삭제
+                        <button onClick={() => handleDeleteAlbum(album.id, album.photos)} className="px-3 py-1 bg-red-100 text-red-600 border border-red-200 text-sm font-bold rounded hover:bg-red-200 transition-colors">
+                          앨범 전체 삭제
                         </button>
                       </div>
                     </div>
@@ -550,26 +601,9 @@ export default function AdminPage() {
           <div className="animate-fade-in space-y-6">
             <div className="bg-purple-50 p-6 rounded-xl border border-purple-100">
               <h2 className="text-lg font-bold text-purple-900 mb-2">✨ 메인 화면 문구 변경</h2>
-              <p className="text-sm text-purple-700 mb-4">
-                사용자가 앱에 접속했을 때 PicJuno 로고 아래에 보이는 소개 문구를 변경합니다.<br/>
-                예: "Picturewrite by Juno.", "2026학년도 3반 사진첩" 등
-              </p>
-              
-              <form onSubmit={handleSaveSettings} className="space-y-4">
-                <input 
-                  type="text" 
-                  value={siteSubtitle} 
-                  onChange={(e) => setSiteSubtitle(e.target.value)} 
-                  placeholder="표시할 문구를 입력하세요" 
-                  className="w-full p-4 border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
-                  required
-                />
-                <button 
-                  type="submit" 
-                  disabled={isSavingSettings}
-                  className={`w-full py-4 rounded-lg text-white font-bold shadow-md transition-all
-                    ${isSavingSettings ? 'bg-gray-400' : 'bg-purple-600 hover:bg-purple-700 hover:shadow-lg'}`}
-                >
+              <form onSubmit={handleSaveSettings} className="space-y-4 mt-4">
+                <input type="text" value={siteSubtitle} onChange={(e) => setSiteSubtitle(e.target.value)} placeholder="표시할 문구를 입력하세요" className="w-full p-4 border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none" required />
+                <button type="submit" disabled={isSavingSettings} className={`w-full py-4 rounded-lg text-white font-bold shadow-md transition-all ${isSavingSettings ? 'bg-gray-400' : 'bg-purple-600 hover:bg-purple-700'}`}>
                   {isSavingSettings ? '저장 중...' : '설정 저장하기 💾'}
                 </button>
               </form>

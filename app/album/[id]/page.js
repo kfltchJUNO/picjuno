@@ -1,50 +1,51 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { db } from '../../../lib/firebase'; // 경로 점 3개 확인!
-import { doc, getDoc } from 'firebase/firestore';
-import { useParams, useRouter, useSearchParams } from 'next/navigation'; // useSearchParams 추가됨
+import { useState, useEffect, useMemo } from 'react';
+import { db } from '../../../lib/firebase'; 
+import { doc, getDoc, updateDoc } from 'firebase/firestore'; // updateDoc 추가됨
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 
 export default function AlbumDetailPage() {
   const { id } = useParams();
   const router = useRouter();
-  const searchParams = useSearchParams(); // 주소창의 쿼리(?code=...)를 읽는 도구
+  const searchParams = useSearchParams(); 
   
   const [album, setAlbum] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState(''); // 에러 메시지 표시용
+  const [errorMsg, setErrorMsg] = useState(''); 
   
   const [isLocked, setIsLocked] = useState(true);
   const [passwordInput, setPasswordInput] = useState('');
   const [selectedImage, setSelectedImage] = useState(null);
 
+  // ★ 정렬 상태 ('latest': 최신순, 'popular': 인기순, 'random': 랜덤)
+  const [sortOrder, setSortOrder] = useState('latest');
+
   useEffect(() => {
     const fetchAlbum = async () => {
-      // ID가 없으면 실행하지 않음 (Next.js 오류 방지)
       if (!id) return;
-
       try {
-        console.log("Fetching album ID:", id); // 디버깅용 로그
-
         const docRef = doc(db, 'albums', id);
         const docSnap = await getDoc(docRef);
 
         if (docSnap.exists()) {
           const data = docSnap.data();
-          setAlbum(data);
+          // ★ 기존 단순 URL 배열을 객체(하트 수 포함)로 안전하게 변환
+          const normalizedPhotos = (data.photos || []).map((p) => 
+            typeof p === 'string' 
+              ? { id: p, url: p, likes: 0, addedAt: data.createdAt?.toMillis() || 0 } 
+              : p
+          );
           
-          // 1. 공개 앨범이면 바로 잠금 해제
+          setAlbum({ ...data, photos: normalizedPhotos });
+          
           if (!data.isSecret) {
             setIsLocked(false);
-          } 
-          // 2. ★ 핵심: 주소창에 있는 코드(?code=...)와 앨범 비번이 같으면 자동 해제!
-          else if (searchParams.get('code') === data.password) {
+          } else if (searchParams.get('code') === data.password) {
             setIsLocked(false);
           }
-
         } else {
-          // 앨범이 DB에 없을 때
           setErrorMsg('앨범을 찾을 수 없습니다. (삭제되었거나 주소가 잘못됨)');
         }
       } catch (error) {
@@ -54,11 +55,70 @@ export default function AlbumDetailPage() {
         setLoading(false);
       }
     };
-
     fetchAlbum();
   }, [id, searchParams]);
 
-  // 비밀번호 직접 입력 확인 (링크 공유로 들어왔을 때)
+  // ★ 좋아요(하트) 클릭 처리 함수
+  const handleLike = async (photoId, e) => {
+    e.stopPropagation(); // 사진 확대되는 것 방지
+    
+    // 중복 방지 (브라우저 로컬스토리지 이용)
+    const likeKey = `liked_${id}_${photoId}`;
+    if (localStorage.getItem(likeKey)) {
+      alert('이미 하트를 누르셨습니다! ❤️');
+      return;
+    }
+
+    // 1. 화면 즉시 업데이트 (빠른 반응속도를 위해)
+    setAlbum(prev => {
+      const updatedPhotos = prev.photos.map(p => 
+        p.id === photoId ? { ...p, likes: (p.likes || 0) + 1 } : p
+      );
+      return { ...prev, photos: updatedPhotos };
+    });
+    
+    // 로컬스토리지에 저장
+    localStorage.setItem(likeKey, 'true');
+
+    // 2. 파이어베이스 실제 데이터 업데이트
+    try {
+      const docRef = doc(db, 'albums', id);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const currentData = docSnap.data();
+        const updatedDbPhotos = currentData.photos.map(p => {
+          const currentId = typeof p === 'string' ? p : p.id;
+          if (currentId === photoId) {
+            return typeof p === 'string' 
+              ? { id: p, url: p, likes: 1, addedAt: Date.now() } 
+              : { ...p, likes: (p.likes || 0) + 1 };
+          }
+          return p;
+        });
+        await updateDoc(docRef, { photos: updatedDbPhotos });
+      }
+    } catch (error) {
+      console.error("좋아요 업데이트 실패", error);
+    }
+  };
+
+  // ★ 정렬 로직 (비밀 폴더는 관리자 업로드 순 = 최신순 고정)
+  const sortedPhotos = useMemo(() => {
+    if (!album || !album.photos) return [];
+    let photosToSort = [...album.photos];
+    
+    if (album.isSecret) return photosToSort; // 비밀 폴더는 정렬하지 않음 (기본순)
+
+    if (sortOrder === 'popular') {
+      return photosToSort.sort((a, b) => (b.likes || 0) - (a.likes || 0));
+    } else if (sortOrder === 'random') {
+      return photosToSort.sort(() => Math.random() - 0.5);
+    } else {
+      // 최신순 (addedAt 기준, 없으면 배열 인덱스 유지)
+      return photosToSort.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+    }
+  }, [album, sortOrder]);
+
   const checkPassword = (e) => {
     e.preventDefault();
     if (album && album.password === passwordInput) {
@@ -69,14 +129,14 @@ export default function AlbumDetailPage() {
     }
   };
 
-  const handleDownload = async (imageUrl, index) => {
+  const handleDownload = async (imageUrl, title) => {
     try {
       const response = await fetch(imageUrl);
       const blob = await response.blob();
       const blobUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = blobUrl;
-      link.download = `${album.title}_${index + 1}.jpg`; 
+      link.download = `${title}_PicJuno.jpg`; 
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -87,10 +147,8 @@ export default function AlbumDetailPage() {
     }
   };
 
-  // 1. 로딩 중
   if (loading) return <div className="text-center py-20">Loading...</div>;
 
-  // 2. 에러 발생 (앨범 없음 등) - 바로 튕기지 않고 메시지를 보여줌
   if (errorMsg) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen text-center p-6">
@@ -104,10 +162,8 @@ export default function AlbumDetailPage() {
     );
   }
   
-  // 3. 앨범 데이터가 아직 없을 때 (안전장치)
   if (!album) return null;
 
-  // 4. 잠겨있는 상태
   if (isLocked) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gray-50">
@@ -126,11 +182,7 @@ export default function AlbumDetailPage() {
             <button type="submit" className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold">
               확인
             </button>
-            <button 
-              type="button" 
-              onClick={() => router.push('/')}
-              className="text-sm text-gray-400 underline"
-            >
+            <button type="button" onClick={() => router.push('/')} className="text-sm text-gray-400 underline">
               메인으로 돌아가기
             </button>
           </form>
@@ -139,39 +191,63 @@ export default function AlbumDetailPage() {
     );
   }
 
-  // 5. 갤러리 화면 (잠금 해제됨)
   return (
     <div className="min-h-screen bg-white pb-20">
-      <nav className="sticky top-0 z-10 bg-white/80 backdrop-blur-md border-b px-6 py-4 flex items-center justify-between">
+      <nav className="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b px-6 py-4 flex items-center justify-between">
         <button onClick={() => router.push('/')} className="text-2xl">←</button>
         <h1 className="font-bold text-lg truncate max-w-[200px]">{album.title}</h1>
         <div className="w-8"></div>
       </nav>
 
-      <main className="p-4">
-        {album.photos.length === 0 ? (
+      <main className="p-4 max-w-6xl mx-auto">
+        
+        {/* ★ 공개 앨범일 경우에만 노출되는 정렬 버튼 */}
+        {!album.isSecret && album.photos.length > 0 && (
+          <div className="flex justify-center space-x-2 mb-6 mt-2">
+            <button onClick={() => setSortOrder('latest')} className={`px-4 py-1.5 rounded-full text-sm font-bold transition ${sortOrder === 'latest' ? 'bg-blue-600 text-white shadow' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>최신순</button>
+            <button onClick={() => setSortOrder('popular')} className={`px-4 py-1.5 rounded-full text-sm font-bold transition ${sortOrder === 'popular' ? 'bg-pink-500 text-white shadow' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>인기순 🔥</button>
+            <button onClick={() => setSortOrder('random')} className={`px-4 py-1.5 rounded-full text-sm font-bold transition ${sortOrder === 'random' ? 'bg-indigo-500 text-white shadow' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>랜덤 🎲</button>
+          </div>
+        )}
+
+        {sortedPhotos.length === 0 ? (
            <div className="text-center py-20 text-gray-400">사진이 없습니다.</div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-            {album.photos.map((url, index) => (
-              <div 
-                key={index} 
-                onClick={() => setSelectedImage({ url, index })}
-                className="relative aspect-square cursor-pointer bg-gray-100 rounded-lg overflow-hidden"
-              >
-                <Image
-                  src={url}
-                  alt={`Photo ${index + 1}`}
-                  fill
-                  className="object-cover hover:scale-110 transition-transform duration-300"
-                  sizes="(max-width: 768px) 50vw, 33vw"
-                />
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            {sortedPhotos.map((photo, index) => (
+              <div key={photo.id || index} className="flex flex-col">
+                <div 
+                  onClick={() => setSelectedImage(photo)}
+                  className="relative aspect-square cursor-pointer bg-gray-100 rounded-xl overflow-hidden shadow-sm"
+                >
+                  <Image
+                    src={photo.url}
+                    alt={`Photo`}
+                    fill
+                    className="object-cover hover:scale-105 transition-transform duration-300"
+                    sizes="(max-width: 768px) 50vw, 33vw"
+                  />
+                </div>
+                
+                {/* ★ 하단 좋아요(하트) 영역 */}
+                <div className="flex justify-between items-center px-1 mt-2">
+                  <button 
+                    onClick={(e) => handleLike(photo.id, e)}
+                    className="flex items-center space-x-1 text-gray-500 hover:text-pink-500 transition-colors group"
+                  >
+                    <span className="text-xl group-active:scale-150 transition-transform">
+                      {localStorage.getItem(`liked_${id}_${photo.id}`) ? '❤️' : '🤍'}
+                    </span>
+                    <span className="text-sm font-bold">{photo.likes || 0}</span>
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         )}
       </main>
 
+      {/* 사진 확대 뷰어 */}
       {selectedImage && (
         <div className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-4 animate-fade-in">
           <button 
@@ -191,7 +267,7 @@ export default function AlbumDetailPage() {
           </div>
           <div className="absolute bottom-10 flex flex-col items-center gap-4 w-full px-6">
             <button
-              onClick={() => handleDownload(selectedImage.url, selectedImage.index)}
+              onClick={() => handleDownload(selectedImage.url, album.title)}
               className="bg-white text-black px-8 py-3 rounded-full font-bold shadow-lg flex items-center space-x-2 hover:bg-gray-200 transition"
             >
               <span>⬇ 저장하기</span>
