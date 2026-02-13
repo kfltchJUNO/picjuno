@@ -2,19 +2,39 @@
 
 import { useState, useEffect } from 'react';
 import { db } from '../lib/firebase';
-import { collection, query, where, orderBy, getDocs } from 'firebase/firestore';
+import { collection, query, where, orderBy, getDocs, doc, getDoc } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
-import Image from 'next/image'; // 이미지 사용을 위해 필수!
+import Image from 'next/image';
 
 export default function HomePage() {
   const router = useRouter();
+  
+  // 상태 관리
   const [activeTab, setActiveTab] = useState('public');
   const [publicAlbums, setPublicAlbums] = useState([]);
   const [loading, setLoading] = useState(true);
   const [secretCode, setSecretCode] = useState('');
   const [searchLoading, setSearchLoading] = useState(false);
+  
+  // 앱 기본 설정(문구) 상태
+  const [siteSubtitle, setSiteSubtitle] = useState('Every Moment, Delivered.');
 
   useEffect(() => {
+    // 1. 파이어베이스에서 앱 설정(소개 문구) 불러오기
+    const fetchSettings = async () => {
+      try {
+        const docRef = doc(db, 'settings', 'general');
+        const docSnap = await getDoc(docRef);
+        
+        if (docSnap.exists() && docSnap.data().subtitle) {
+          setSiteSubtitle(docSnap.data().subtitle);
+        }
+      } catch (error) {
+        console.error("Error fetching settings:", error);
+      }
+    };
+
+    // 2. 파이어베이스에서 공개 앨범 목록 불러오기
     const fetchPublicAlbums = async () => {
       try {
         const q = query(
@@ -27,6 +47,7 @@ export default function HomePage() {
           id: doc.id,
           ...doc.data()
         }));
+        
         setPublicAlbums(albumsData);
       } catch (error) {
         console.error("Error fetching albums:", error);
@@ -34,12 +55,16 @@ export default function HomePage() {
         setLoading(false);
       }
     };
+
+    fetchSettings();
     fetchPublicAlbums();
   }, []);
 
+  // 비밀번호 입력 처리 함수
   const handleSecretLogin = async (e) => {
     e.preventDefault();
     if (!secretCode) return;
+    
     setSearchLoading(true);
     try {
       const q = query(
@@ -49,7 +74,6 @@ export default function HomePage() {
       const querySnapshot = await getDocs(q);
       
       if (querySnapshot.empty) {
-        // ★ 이 부분이 수정되었습니다!
         alert('존재하지 않는 코드이거나, 기간이 만료되어 삭제된 폴더입니다.');
       } else {
         const albumId = querySnapshot.docs[0].id;
@@ -65,36 +89,37 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen bg-white">
-      {/* --- 헤더 영역 수정됨 --- */}
+      {/* 헤더 영역 */}
       <header className="pt-12 pb-8 px-6 text-center">
         <div className="flex justify-center items-center gap-3 mb-2">
-          {/* 로고 이미지 컨테이너 */}
           <div className="relative w-12 h-12 shadow-md rounded-xl overflow-hidden bg-gray-50">
-             <Image
-               src="/logo.png" 
-               alt="PicJuno Logo"
-               fill
-               className="object-cover"
-               priority
-             />
+            <Image 
+              src="/logo.png" 
+              alt="PicJuno Logo" 
+              fill 
+              className="object-cover" 
+              priority 
+            />
           </div>
-          {/* 텍스트 로고 */}
           <h1 className="text-4xl font-extrabold text-gray-900 tracking-tight font-sans">
             PicJuno
           </h1>
         </div>
-        <p className="text-gray-500 text-lg font-light">
-          Every Moment, Delivered.
+        {/* 관리자 페이지에서 설정한 문구가 뜨는 곳 */}
+        <p className="text-gray-500 text-lg font-light break-keep">
+          {siteSubtitle}
         </p>
       </header>
-      {/* ----------------------- */}
 
+      {/* 탭 버튼 영역 */}
       <div className="flex justify-center mb-10">
         <div className="bg-gray-100 p-1 rounded-full inline-flex">
           <button
             onClick={() => setActiveTab('public')}
             className={`px-6 py-2 rounded-full text-sm font-bold transition-all duration-200 ${
-              activeTab === 'public' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              activeTab === 'public' 
+                ? 'bg-white text-gray-900 shadow-sm' 
+                : 'text-gray-500 hover:text-gray-700'
             }`}
           >
             공개 갤러리
@@ -102,7 +127,9 @@ export default function HomePage() {
           <button
             onClick={() => setActiveTab('secret')}
             className={`px-6 py-2 rounded-full text-sm font-bold transition-all duration-200 ${
-              activeTab === 'secret' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              activeTab === 'secret' 
+                ? 'bg-white text-blue-600 shadow-sm' 
+                : 'text-gray-500 hover:text-gray-700'
             }`}
           >
             비밀 접속
@@ -110,11 +137,16 @@ export default function HomePage() {
         </div>
       </div>
 
+      {/* 메인 콘텐츠 영역 */}
       <main className="max-w-6xl mx-auto px-6 pb-20">
+        
+        {/* 1. 공개 갤러리 탭 */}
         {activeTab === 'public' && (
           <div>
             {loading ? (
-              <div className="text-center py-20 text-gray-400">Loading albums...</div>
+              <div className="text-center py-20 text-gray-400">
+                Loading albums...
+              </div>
             ) : publicAlbums.length === 0 ? (
               <div className="text-center py-20 bg-gray-50 rounded-2xl">
                 <p className="text-gray-400">등록된 앨범이 없습니다.</p>
@@ -136,7 +168,9 @@ export default function HomePage() {
                           className="object-cover group-hover:scale-105 transition-transform duration-500"
                         />
                       ) : (
-                        <div className="flex items-center justify-center h-full text-gray-400">No Image</div>
+                        <div className="flex items-center justify-center h-full text-gray-400">
+                          No Image
+                        </div>
                       )}
                       <div className="absolute bottom-3 right-3 bg-black/50 backdrop-blur-sm text-white text-xs px-2 py-1 rounded-md">
                         {album.photos?.length || 0}장
@@ -146,7 +180,9 @@ export default function HomePage() {
                       {album.title}
                     </h3>
                     <p className="text-sm text-gray-500">
-                      {album.createdAt?.seconds ? new Date(album.createdAt.seconds * 1000).toLocaleDateString() : 'Just now'}
+                      {album.createdAt?.seconds 
+                        ? new Date(album.createdAt.seconds * 1000).toLocaleDateString() 
+                        : 'Just now'}
                     </p>
                   </div>
                 ))}
@@ -155,19 +191,26 @@ export default function HomePage() {
           </div>
         )}
 
+        {/* 2. 비밀 접속 탭 */}
         {activeTab === 'secret' && (
           <div className="flex flex-col items-center justify-center py-10">
             <div className="w-full max-w-md bg-gray-50 p-8 rounded-2xl border border-gray-100 text-center shadow-sm">
-              <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6 text-2xl">🔒</div>
-              <h2 className="text-xl font-bold text-gray-800 mb-2">비공개 앨범 접속</h2>
-              <p className="text-gray-500 text-sm mb-6">전달받은 비밀번호를 입력해주세요.</p>
+              <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6 text-2xl">
+                🔒
+              </div>
+              <h2 className="text-xl font-bold text-gray-800 mb-2">
+                비공개 앨범 접속
+              </h2>
+              <p className="text-gray-500 text-sm mb-6">
+                전달받은 비밀번호를 입력해주세요.
+              </p>
               
               <form onSubmit={handleSecretLogin} className="space-y-4">
                 <input
                   type="text"
                   value={secretCode}
                   onChange={(e) => setSecretCode(e.target.value)}
-                  placeholder="예: d824"
+                  placeholder="예: Class26"
                   className="w-full p-4 text-center text-lg border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all bg-white"
                 />
                 <button
@@ -183,6 +226,7 @@ export default function HomePage() {
         )}
       </main>
 
+      {/* 푸터 영역 */}
       <footer className="text-center text-gray-400 text-sm py-10 border-t border-gray-100 mt-10">
         &copy; {new Date().getFullYear()} PicJuno. All rights reserved.
       </footer>

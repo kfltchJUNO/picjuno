@@ -3,14 +3,15 @@
 import { useState, useEffect, useRef } from 'react';
 import { auth, db, storage } from '../../lib/firebase';
 import { signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, addDoc, serverTimestamp, getDocs, query, orderBy, doc, deleteDoc, updateDoc } from 'firebase/firestore';
+// ★ setDoc, getDoc 추가됨
+import { collection, addDoc, serverTimestamp, getDocs, query, orderBy, doc, deleteDoc, updateDoc, setDoc, getDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import Draggable from 'react-draggable';
 
 export default function AdminPage() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [adminTab, setAdminTab] = useState('upload'); 
+  const [adminTab, setAdminTab] = useState('upload'); // 'upload', 'manage', 'settings'
 
   // --- 로그인 상태 ---
   const [email, setEmail] = useState('');
@@ -24,6 +25,7 @@ export default function AdminPage() {
   const [previewUrl, setPreviewUrl] = useState(null); 
   const [isUploading, setIsUploading] = useState(false);
   const [shareData, setShareData] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   // --- 워터마크 상태 ---
   const [useWatermark, setUseWatermark] = useState(false);
@@ -33,12 +35,16 @@ export default function AdminPage() {
   const [wmOpacity, setWmOpacity] = useState(0.8);
   const [wmPosition, setWmPosition] = useState({ x: 0, y: 0 });
   const previewImgRef = useRef(null);
-  const draggableRef = useRef(null);
+  const draggableRef = useRef(null); 
   const [presets, setPresets] = useState([]);
 
   // --- 앨범 관리(삭제) 상태 ---
   const [albumsList, setAlbumsList] = useState([]);
   const [selectedAlbum, setSelectedAlbum] = useState(null); 
+
+  // ★ --- 앱 설정 상태 ---
+  const [siteSubtitle, setSiteSubtitle] = useState('');
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -50,10 +56,15 @@ export default function AdminPage() {
     return () => unsubscribe();
   }, []);
 
+  // 탭 변경 시 데이터 불러오기
   useEffect(() => {
-    if (user && adminTab === 'manage') {
-      fetchAlbumsList();
-      setSelectedAlbum(null);
+    if (user) {
+      if (adminTab === 'manage') {
+        fetchAlbumsList();
+        setSelectedAlbum(null);
+      } else if (adminTab === 'settings') {
+        fetchSettings();
+      }
     }
   }, [adminTab, user]);
 
@@ -61,6 +72,39 @@ export default function AdminPage() {
     const q = query(collection(db, 'albums'), orderBy('createdAt', 'desc'));
     const snap = await getDocs(q);
     setAlbumsList(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+  };
+
+  // ★ 파이어베이스에서 기존 문구 불러오기
+  const fetchSettings = async () => {
+    try {
+      const docRef = doc(db, 'settings', 'general');
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists() && docSnap.data().subtitle) {
+        setSiteSubtitle(docSnap.data().subtitle);
+      } else {
+        setSiteSubtitle('Every Moment, Delivered.'); // 데이터가 없으면 기본값
+      }
+    } catch (error) {
+      console.error("Error fetching settings:", error);
+    }
+  };
+
+  // ★ 파이어베이스에 새 문구 저장하기
+  const handleSaveSettings = async (e) => {
+    e.preventDefault();
+    setIsSavingSettings(true);
+    try {
+      // merge: true는 다른 설정이 생겨도 덮어쓰지 않고 이 항목만 업데이트한다는 뜻입니다.
+      await setDoc(doc(db, 'settings', 'general'), {
+        subtitle: siteSubtitle
+      }, { merge: true });
+      alert('앱 설정이 성공적으로 저장되었습니다! 메인 화면에 즉시 반영됩니다.');
+    } catch (error) {
+      console.error("Error saving settings:", error);
+      alert('설정 저장 중 오류가 발생했습니다.');
+    } finally {
+      setIsSavingSettings(false);
+    }
   };
 
   const handleLogin = async (e) => {
@@ -72,6 +116,7 @@ export default function AdminPage() {
     }
   };
 
+  // (이하 앨범 삭제, 사진 삭제, 복사, 업로드, 드래그앤드롭 로직은 동일)
   const handleDeleteAlbum = async (albumId, photoUrls) => {
     if (!confirm('경고: 이 앨범과 내부의 모든 사진 파일이 영구적으로 삭제됩니다. 계속하시겠습니까?')) return;
     try {
@@ -107,27 +152,32 @@ export default function AdminPage() {
     }
   };
 
-  // ★ 추가된 기능: 관리 탭에서 링크 및 코드 복사하기
   const handleCopyLink = (album) => {
     const url = `${window.location.origin}/album/${album.id}${album.isSecret ? `?code=${album.password}` : ''}`;
     let text = `[PicJuno] 사진 도착!\n👉 주소: ${url}`;
-    
     if (album.isSecret) {
       text += `\n🔒 비번: ${album.password}`;
     }
-    
     navigator.clipboard.writeText(text).then(() => {
       alert('링크와 코드가 클립보드에 복사되었습니다!');
     });
   };
 
   const handleFileChange = (e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const selectedFiles = Array.from(e.target.files);
-      setFiles(selectedFiles);
-      setPreviewUrl(URL.createObjectURL(selectedFiles[0]));
-    }
+    if (e.target.files && e.target.files.length > 0) processSelectedFiles(e.target.files);
   };
+  const handleDragOver = (e) => { e.preventDefault(); setIsDragging(true); };
+  const handleDragLeave = (e) => { e.preventDefault(); setIsDragging(false); };
+  const handleDrop = (e) => {
+    e.preventDefault(); setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) processSelectedFiles(e.dataTransfer.files);
+  };
+  const processSelectedFiles = (fileList) => {
+    const selectedFiles = Array.from(fileList);
+    setFiles(selectedFiles);
+    setPreviewUrl(URL.createObjectURL(selectedFiles[0]));
+  };
+
   const handleDragStop = (e, data) => setWmPosition({ x: data.x, y: data.y });
   const savePreset = () => {
     const name = prompt('현재 스타일 저장 이름:');
@@ -146,6 +196,7 @@ export default function AdminPage() {
     setPresets(updated);
     localStorage.setItem('wmPresets', JSON.stringify(updated));
   }
+  
   const processFileWithWatermark = async (file) => {
     if (!useWatermark) return file;
     return new Promise((resolve) => {
@@ -183,14 +234,14 @@ export default function AdminPage() {
         return getDownloadURL(storageRef);
       });
       const photoUrls = await Promise.all(uploadPromises);
-      await addDoc(collection(db, 'albums'), {
+      const docRef = await addDoc(collection(db, 'albums'), {
         title: albumTitle,
         isSecret: isSecret,
         password: isSecret ? albumPassword : null,
         photos: photoUrls,
         createdAt: serverTimestamp(),
       });
-      setShareData({ title: albumTitle, password: isSecret ? albumPassword : null, url: window.location.origin });
+      setShareData({ id: docRef.id, title: albumTitle, password: isSecret ? albumPassword : null, url: window.location.origin });
       setFiles([]); setPreviewUrl(null); setAlbumTitle('');
       alert('완료되었습니다!');
     } catch (error) {
@@ -224,18 +275,25 @@ export default function AdminPage() {
           <button onClick={() => signOut(auth)} className="text-red-500 underline text-sm">로그아웃</button>
         </div>
 
-        <div className="flex space-x-2 mb-8 bg-gray-100 p-1 rounded-lg w-fit">
+        {/* ★ 탭 메뉴 3개로 확장 */}
+        <div className="flex flex-wrap gap-2 mb-8 bg-gray-100 p-1 rounded-lg w-fit">
           <button 
             onClick={() => setAdminTab('upload')} 
-            className={`px-6 py-2 rounded-md font-bold transition-all ${adminTab === 'upload' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+            className={`px-4 py-2 rounded-md font-bold transition-all ${adminTab === 'upload' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
           >
             새 사진 업로드
           </button>
           <button 
             onClick={() => setAdminTab('manage')} 
-            className={`px-6 py-2 rounded-md font-bold transition-all ${adminTab === 'manage' ? 'bg-white shadow text-red-600' : 'text-gray-500 hover:text-gray-700'}`}
+            className={`px-4 py-2 rounded-md font-bold transition-all ${adminTab === 'manage' ? 'bg-white shadow text-red-600' : 'text-gray-500 hover:text-gray-700'}`}
           >
             앨범 관리 및 삭제
+          </button>
+          <button 
+            onClick={() => setAdminTab('settings')} 
+            className={`px-4 py-2 rounded-md font-bold transition-all ${adminTab === 'settings' ? 'bg-white shadow text-purple-600' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            앱 기본 설정
           </button>
         </div>
 
@@ -245,7 +303,7 @@ export default function AdminPage() {
              {shareData && (
                 <div className="mb-6 p-4 bg-green-100 text-green-800 rounded-lg text-center border border-green-200">
                   <p className="font-bold">🎉 업로드 완료!</p>
-                  <button onClick={() => navigator.clipboard.writeText(`[PicJuno] 사진 도착!\n주소: ${shareData.url}/album/${shareData.id || ''}${shareData.password ? `?code=${shareData.password}` : ''}\n${shareData.password ? `비번: ${shareData.password}` : ''}`).then(()=>alert('복사됨!'))} 
+                  <button onClick={() => navigator.clipboard.writeText(`[PicJuno] 사진 도착!\n👉 주소: ${shareData.url}/album/${shareData.id || ''}${shareData.password ? `?code=${shareData.password}` : ''}\n${shareData.password ? `🔒 비번: ${shareData.password}` : ''}`).then(()=>alert('복사됨!'))} 
                      className="mt-2 bg-green-600 text-white px-4 py-1 rounded-full text-sm font-bold shadow-sm hover:bg-green-700">
                     📋 공유 텍스트 복사하기
                   </button>
@@ -262,13 +320,20 @@ export default function AdminPage() {
                 </div>
               </div>
 
-              <div className="border-2 border-dashed border-gray-300 p-8 rounded-lg text-center hover:bg-gray-50 transition-colors">
+              <div 
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                className={`border-2 border-dashed p-8 rounded-lg text-center transition-colors 
+                  ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:bg-gray-50'}`}
+              >
                 <input type="file" multiple accept="image/*" onChange={handleFileChange} className="hidden" id="fileInput"/>
-                <label htmlFor="fileInput" className="cursor-pointer flex flex-col items-center justify-center">
+                <label htmlFor="fileInput" className="cursor-pointer flex flex-col items-center justify-center w-full h-full">
                   <span className="text-4xl mb-2">📷</span>
                   <span className="text-blue-600 font-bold hover:underline text-lg">
                     {files.length > 0 ? `${files.length}장의 사진 선택됨` : "+ 사진 추가하기 (Drag & Drop)"}
                   </span>
+                  <span className="text-sm text-gray-400 mt-2">이곳에 폴더 안의 사진을 드래그해서 놓으세요</span>
                 </label>
               </div>
 
@@ -300,10 +365,11 @@ export default function AdminPage() {
                         </div>
                         <div><label className="text-xs text-gray-500 font-bold">크기 ({wmSize}px)</label><input type="range" min="10" max="100" value={wmSize} onChange={e => setWmSize(parseInt(e.target.value))} className="w-full mt-2" /></div>
                       </div>
+                      
                       <div className="w-full md:w-2/3 relative border-2 border-blue-200 overflow-hidden bg-gray-100 select-none rounded-lg">
                         <img ref={previewImgRef} src={previewUrl} alt="Preview" className="w-full h-auto pointer-events-none block" />
-                        <Draggable bounds="parent" onStop={handleDragStop} defaultPosition={{x: 0, y: 0}}>
-                          <div
+                        <Draggable nodeRef={draggableRef} bounds="parent" onStop={handleDragStop} defaultPosition={{x: 0, y: 0}}>
+                          <div 
                             ref={draggableRef}
                             className="absolute top-0 left-0 cursor-move font-bold whitespace-nowrap p-2 border-2 border-transparent hover:border-dashed hover:border-white/50"
                             style={{ color: wmColor, fontSize: `${wmSize}px`, opacity: wmOpacity, textShadow: '2px 2px 4px rgba(0,0,0,0.5)', zIndex: 20 }}>
@@ -381,7 +447,6 @@ export default function AdminPage() {
                         </div>
                       </div>
                       
-                      {/* ★ 액션 버튼 영역 (복사 버튼 추가됨) */}
                       <div className="flex flex-wrap gap-2 shrink-0">
                         <button 
                           onClick={() => handleCopyLink(album)}
@@ -409,6 +474,39 @@ export default function AdminPage() {
             )}
           </div>
         )}
+
+        {/* ==================== 3. 앱 설정 탭 ==================== */}
+        {adminTab === 'settings' && (
+          <div className="animate-fade-in space-y-6">
+            <div className="bg-purple-50 p-6 rounded-xl border border-purple-100">
+              <h2 className="text-lg font-bold text-purple-900 mb-2">✨ 메인 화면 문구 변경</h2>
+              <p className="text-sm text-purple-700 mb-4">
+                사용자가 앱에 접속했을 때 PicJuno 로고 아래에 보이는 소개 문구를 변경합니다.<br/>
+                예: "Every Moment, Delivered.", "2026학년도 3반 사진첩" 등
+              </p>
+              
+              <form onSubmit={handleSaveSettings} className="space-y-4">
+                <input 
+                  type="text" 
+                  value={siteSubtitle} 
+                  onChange={(e) => setSiteSubtitle(e.target.value)} 
+                  placeholder="표시할 문구를 입력하세요" 
+                  className="w-full p-4 border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
+                  required
+                />
+                <button 
+                  type="submit" 
+                  disabled={isSavingSettings}
+                  className={`w-full py-4 rounded-lg text-white font-bold shadow-md transition-all
+                    ${isSavingSettings ? 'bg-gray-400' : 'bg-purple-600 hover:bg-purple-700 hover:shadow-lg'}`}
+                >
+                  {isSavingSettings ? '저장 중...' : '설정 저장하기 💾'}
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );
