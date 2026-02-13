@@ -19,12 +19,12 @@ export default function AdminPage() {
   const [isSecret, setIsSecret] = useState(false);
   const [albumPassword, setAlbumPassword] = useState('');
   
-  // ★ 신규 업로드 상태 (파일 배열, 각각의 워터마크 위치 배열, 활성화된 인덱스)
+  // 신규 업로드 상태
   const [files, setFiles] = useState([]); 
   const [wmPositions, setWmPositions] = useState([]); 
   const [activeFileIndex, setActiveFileIndex] = useState(0);
 
-  // ★ 기존 앨범 추가 업로드 상태
+  // ★ 앨범 사진 추가(Append) 업로드 상태
   const [appendFiles, setAppendFiles] = useState([]);
   const [appendWmPositions, setAppendWmPositions] = useState([]);
   const [activeAppendIndex, setActiveAppendIndex] = useState(0);
@@ -35,7 +35,7 @@ export default function AdminPage() {
   const [isDragging, setIsDragging] = useState(false);
   const [isAppendDragging, setIsAppendDragging] = useState(false);
 
-  // 공통 워터마크 스타일 설정
+  // 워터마크 공통 상태
   const [useWatermark, setUseWatermark] = useState(false);
   const [wmText, setWmText] = useState('Picturewrite by Juno.');
   const [wmColor, setWmColor] = useState('#ffffff');
@@ -132,7 +132,6 @@ export default function AdminPage() {
   const processSelectedFiles = (fileList) => {
     const newFiles = Array.from(fileList);
     setFiles(prev => [...prev, ...newFiles]);
-    // 새 파일마다 고유의 워터마크 위치(0,0) 생성
     setWmPositions(prev => [...prev, ...newFiles.map(() => ({ x: 0, y: 0 }))]);
   };
 
@@ -144,7 +143,7 @@ export default function AdminPage() {
     else if (activeFileIndex === indexToRemove) setActiveFileIndex(0);
   };
 
-  // ===================== 추가(Append) 업로드 처리 =====================
+  // ===================== 앨범 사진 추가(Append) 처리 =====================
   const handleAppendFileChange = (e) => { if (e.target.files && e.target.files.length > 0) processAppendFiles(e.target.files); };
   const handleAppendDragOver = (e) => { e.preventDefault(); setIsAppendDragging(true); };
   const handleAppendDragLeave = (e) => { e.preventDefault(); setIsAppendDragging(false); };
@@ -153,6 +152,7 @@ export default function AdminPage() {
   const processAppendFiles = (fileList) => {
     const newFiles = Array.from(fileList);
     setAppendFiles(prev => [...prev, ...newFiles]);
+    // 추가된 파일 개수만큼 워터마크 초기 위치(0,0) 생성
     setAppendWmPositions(prev => [...prev, ...newFiles.map(() => ({ x: 0, y: 0 }))]);
   };
 
@@ -164,7 +164,7 @@ export default function AdminPage() {
     else if (activeAppendIndex === indexToRemove) setActiveAppendIndex(0);
   };
 
-  // ===================== 워터마크 & 업로드 공통 로직 =====================
+  // ===================== 워터마크 & 공통 업로드 로직 =====================
   const savePreset = () => {
     const name = prompt('현재 스타일 저장 이름:');
     if (!name) return;
@@ -178,7 +178,6 @@ export default function AdminPage() {
     setWmText(preset.text); setWmColor(preset.color); setWmSize(preset.size); setWmOpacity(preset.opacity);
   };
 
-  // ★ 해당 사진에 매칭되는 개별 워터마크 위치(pos)를 불러와서 적용
   const processFileWithWatermark = async (file, index, positionsArray, imgRef) => {
     if (!useWatermark) return file;
     return new Promise((resolve) => {
@@ -190,7 +189,6 @@ export default function AdminPage() {
         canvas.width = img.width; canvas.height = img.height;
         ctx.drawImage(img, 0, 0);
         
-        // 미리보기 컨테이너 너비를 기준으로 스케일 계산 (안전장치 600)
         const containerWidth = imgRef?.current?.offsetWidth || 600;
         const scale = img.width / containerWidth;
         const pos = positionsArray[index] || { x: 0, y: 0 };
@@ -205,6 +203,7 @@ export default function AdminPage() {
     });
   };
 
+  // 신규 업로드 실행
   const handleUpload = async (e) => {
     e.preventDefault();
     if (!albumTitle || files.length === 0) return alert('제목과 사진은 필수입니다.');
@@ -246,6 +245,7 @@ export default function AdminPage() {
     }
   };
 
+  // 기존 앨범 사진 추가(Append) 실행
   const handleAppendUpload = async () => {
     if (appendFiles.length === 0) return;
     setIsAppending(true);
@@ -287,6 +287,7 @@ export default function AdminPage() {
     }
   };
 
+  // 삭제 & 링크 복사
   const handleDeleteAlbum = async (albumId, photoArray) => {
     if (!confirm('경고: 앨범과 모든 사진이 영구 삭제됩니다. 계속하시겠습니까?')) return;
     try {
@@ -386,13 +387,11 @@ export default function AdminPage() {
 
               {files.length > 0 && (
                 <div className="border rounded-lg p-4 bg-white shadow-sm">
-                  
-                  {/* ★ 상단 썸네일 선택기 (클릭하여 개별 사진의 워터마크 위치 수정) */}
                   <div className="mb-4">
                     <div className="flex justify-between items-end mb-2">
                        <label className="flex items-center space-x-2 font-bold text-lg cursor-pointer">
                          <input type="checkbox" checked={useWatermark} onChange={e => setUseWatermark(e.target.checked)} className="w-5 h-5 text-blue-600" />
-                         <span>워터마크 적용 (사진을 클릭하여 위치 수정)</span>
+                         <span>워터마크 적용 (사진 클릭하여 위치 수정)</span>
                        </label>
                        <button type="button" onClick={() => {setFiles([]); setWmPositions([]);}} className="text-sm text-red-500 underline">전체 비우기</button>
                     </div>
@@ -410,6 +409,13 @@ export default function AdminPage() {
                   {useWatermark && (
                     <div className="flex flex-col md:flex-row gap-6">
                       <div className="w-full md:w-1/3 space-y-4 bg-gray-50 p-4 rounded-lg h-fit">
+                        <div className="flex justify-between">
+                            <select onChange={(e) => e.target.value && applyPreset(JSON.parse(e.target.value))} className="p-1 border rounded text-xs bg-white flex-1 mr-2">
+                                <option value="">-- 스타일 불러오기 --</option>
+                                {presets.map((p, i) => <option key={i} value={JSON.stringify(p)}>{p.name}</option>)}
+                            </select>
+                            <button type="button" onClick={savePreset} className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs font-bold hover:bg-blue-200">스타일 저장</button>
+                        </div>
                         <div><label className="text-xs text-gray-500 font-bold">텍스트 내용</label><input type="text" value={wmText} onChange={e => setWmText(e.target.value)} className="w-full p-2 border rounded mt-1" /></div>
                         <div className="flex gap-2">
                             <div className="flex-1"><label className="text-xs text-gray-500 font-bold">색상</label><input type="color" value={wmColor} onChange={e => setWmColor(e.target.value)} className="w-full h-10 cursor-pointer mt-1" /></div>
@@ -418,7 +424,6 @@ export default function AdminPage() {
                         <div><label className="text-xs text-gray-500 font-bold">크기 ({wmSize}px)</label><input type="range" min="10" max="100" value={wmSize} onChange={e => setWmSize(parseInt(e.target.value))} className="w-full mt-2" /></div>
                       </div>
                       
-                      {/* ★ 개별 워터마크 드래그 화면 */}
                       <div className="w-full md:w-2/3 relative border-2 border-blue-200 overflow-hidden bg-gray-100 select-none rounded-lg flex items-center justify-center">
                         {files[activeFileIndex] && (
                           <>
@@ -429,7 +434,7 @@ export default function AdminPage() {
                               position={wmPositions[activeFileIndex] || {x:0, y:0}}
                               onDrag={(e, data) => setWmPositions(prev => { const newPos = [...prev]; newPos[activeFileIndex] = {x: data.x, y: data.y}; return newPos; })}
                             >
-                              <div ref={draggableRef} className="absolute top-0 left-0 cursor-move font-bold whitespace-nowrap p-2 border-2 border-transparent hover:border-dashed hover:border-white/50"
+                              <div ref={draggableRef} className="absolute top-0 left-0 cursor-move font-bold whitespace-nowrap p-2 hover:border-dashed hover:border-white/50"
                                 style={{ color: wmColor, fontSize: `${wmSize}px`, opacity: wmOpacity, textShadow: '2px 2px 4px rgba(0,0,0,0.5)', zIndex: 20 }}>
                                 {wmText}
                               </div>
@@ -458,10 +463,11 @@ export default function AdminPage() {
                   <h2 className="text-lg font-bold">{selectedAlbum.title} ({selectedAlbum.photos?.length || 0}장)</h2>
                 </div>
 
+                {/* ★ 앨범 사진 추가 구역 (워터마크 패널 완벽 이식) */}
                 <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-xl">
-                  <h3 className="font-bold text-blue-800 mb-3">➕ 이 앨범에 사진 추가 (개별 워터마크 지원)</h3>
+                  <h3 className="font-bold text-blue-800 mb-3">➕ 이 앨범에 사진 추가</h3>
                   
-                  <div onDragOver={handleAppendDragOver} onDragLeave={handleAppendDragLeave} onDrop={handleAppendDrop} className={`border-2 border-dashed p-6 rounded-lg text-center bg-white transition-colors cursor-pointer ${isAppendDragging ? 'border-blue-500 bg-blue-100' : 'border-blue-300 hover:bg-gray-50'}`}>
+                  <div onDragOver={handleAppendDragOver} onDragLeave={handleAppendDragLeave} onDrop={handleAppendDrop} className={`border-2 border-dashed p-6 rounded-lg text-center bg-white transition-colors cursor-pointer mb-4 ${isAppendDragging ? 'border-blue-500 bg-blue-100' : 'border-blue-300 hover:bg-gray-50'}`}>
                     <input type="file" multiple accept="image/*" onChange={handleAppendFileChange} className="hidden" id="appendFileInput"/>
                     <label htmlFor="appendFileInput" className="cursor-pointer flex flex-col items-center justify-center w-full h-full">
                       <span className="text-blue-600 font-bold hover:underline">{appendFiles.length > 0 ? `현재 ${appendFiles.length}장 추가 선택됨` : "클릭하거나 드래그하여 사진 추가"}</span>
@@ -469,40 +475,64 @@ export default function AdminPage() {
                   </div>
 
                   {appendFiles.length > 0 && (
-                    <div className="mt-4 bg-white p-4 rounded-lg border shadow-sm">
+                    <div className="bg-white p-4 rounded-lg border shadow-sm">
                       <div className="flex justify-between items-end mb-2">
-                        <label className="flex items-center space-x-2 font-bold text-sm cursor-pointer">
-                           <input type="checkbox" checked={useWatermark} onChange={e => setUseWatermark(e.target.checked)} className="w-4 h-4 text-blue-600" />
-                           <span>워터마크 적용 (클릭하여 개별 위치 지정)</span>
+                        <label className="flex items-center space-x-2 font-bold text-lg cursor-pointer">
+                           <input type="checkbox" checked={useWatermark} onChange={e => setUseWatermark(e.target.checked)} className="w-5 h-5 text-blue-600" />
+                           <span>워터마크 적용 (사진 클릭하여 위치 수정)</span>
                         </label>
-                        <button type="button" onClick={() => {setAppendFiles([]); setAppendWmPositions([]);}} className="text-xs text-red-500 underline">비우기</button>
+                        <button type="button" onClick={() => {setAppendFiles([]); setAppendWmPositions([]);}} className="text-sm text-red-500 underline">비우기</button>
                       </div>
 
-                      <div className="flex gap-2 overflow-x-auto pb-2 mb-4 border-b border-gray-100">
+                      <div className="flex gap-2 overflow-x-auto pb-2 mb-4 border-b border-gray-100 p-1">
                         {appendFiles.map((file, idx) => (
-                          <div key={idx} onClick={() => setActiveAppendIndex(idx)} className={`relative w-14 h-14 shrink-0 cursor-pointer rounded overflow-hidden border-2 transition-all ${activeAppendIndex === idx ? 'border-blue-500 scale-105' : 'border-transparent opacity-60 hover:opacity-100'}`}>
+                          <div key={idx} onClick={() => setActiveAppendIndex(idx)} className={`relative w-16 h-16 shrink-0 cursor-pointer rounded-md overflow-hidden border-2 transition-all ${activeAppendIndex === idx ? 'border-blue-500 shadow-md scale-105' : 'border-transparent opacity-60 hover:opacity-100'}`}>
                             <img src={URL.createObjectURL(file)} className="w-full h-full object-cover" />
-                            <button type="button" onClick={(e) => handleRemoveAppendFile(idx, e)} className="absolute top-0 right-0 bg-red-500/80 text-white w-4 h-4 flex justify-center items-center text-[10px] hover:bg-red-600">✕</button>
+                            <button type="button" onClick={(e) => handleRemoveAppendFile(idx, e)} className="absolute top-0 right-0 bg-red-500/80 text-white w-5 h-5 flex justify-center items-center text-xs font-bold hover:bg-red-600">✕</button>
                           </div>
                         ))}
                       </div>
 
-                      {useWatermark && appendFiles[activeAppendIndex] && (
-                        <div className="relative border-2 border-blue-200 overflow-hidden bg-gray-100 rounded-lg flex items-center justify-center mb-4">
-                           <img ref={appendPreviewImgRef} src={URL.createObjectURL(appendFiles[activeAppendIndex])} className="w-full h-auto pointer-events-none block" />
-                           <Draggable 
-                              nodeRef={appendDraggableRef} bounds="parent" position={appendWmPositions[activeAppendIndex] || {x:0, y:0}}
-                              onDrag={(e, data) => setAppendWmPositions(prev => { const newPos = [...prev]; newPos[activeAppendIndex] = {x: data.x, y: data.y}; return newPos; })}
-                           >
-                              <div ref={appendDraggableRef} className="absolute top-0 left-0 cursor-move font-bold whitespace-nowrap p-2 hover:border-dashed hover:border-white/50"
-                                style={{ color: wmColor, fontSize: `${wmSize}px`, opacity: wmOpacity, textShadow: '2px 2px 4px rgba(0,0,0,0.5)', zIndex: 20 }}>
-                                {wmText}
-                              </div>
-                           </Draggable>
+                      {useWatermark && (
+                        <div className="flex flex-col md:flex-row gap-6 mb-4">
+                          {/* 개별 워터마크 설정 패널 */}
+                          <div className="w-full md:w-1/3 space-y-4 bg-gray-50 p-4 rounded-lg h-fit">
+                            <div className="flex justify-between">
+                                <select onChange={(e) => e.target.value && applyPreset(JSON.parse(e.target.value))} className="p-1 border rounded text-xs bg-white flex-1 mr-2">
+                                    <option value="">-- 스타일 불러오기 --</option>
+                                    {presets.map((p, i) => <option key={i} value={JSON.stringify(p)}>{p.name}</option>)}
+                                </select>
+                                <button type="button" onClick={savePreset} className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs font-bold hover:bg-blue-200">스타일 저장</button>
+                            </div>
+                            <div><label className="text-xs text-gray-500 font-bold">텍스트 내용</label><input type="text" value={wmText} onChange={e => setWmText(e.target.value)} className="w-full p-2 border rounded mt-1 text-sm" /></div>
+                            <div className="flex gap-2">
+                                <div className="flex-1"><label className="text-xs text-gray-500 font-bold">색상</label><input type="color" value={wmColor} onChange={e => setWmColor(e.target.value)} className="w-full h-8 cursor-pointer mt-1" /></div>
+                                <div className="flex-1"><label className="text-xs text-gray-500 font-bold">투명도</label><input type="range" min="0.1" max="1" step="0.1" value={wmOpacity} onChange={e => setWmOpacity(parseFloat(e.target.value))} className="w-full mt-2" /></div>
+                            </div>
+                            <div><label className="text-xs text-gray-500 font-bold">크기 ({wmSize}px)</label><input type="range" min="10" max="100" value={wmSize} onChange={e => setWmSize(parseInt(e.target.value))} className="w-full mt-2" /></div>
+                          </div>
+                          
+                          {/* 개별 워터마크 드래그 화면 */}
+                          <div className="w-full md:w-2/3 relative border-2 border-blue-200 overflow-hidden bg-gray-100 select-none rounded-lg flex items-center justify-center">
+                            {appendFiles[activeAppendIndex] && (
+                              <>
+                                <img ref={appendPreviewImgRef} src={URL.createObjectURL(appendFiles[activeAppendIndex])} className="w-full h-auto pointer-events-none block" />
+                                <Draggable 
+                                  nodeRef={appendDraggableRef} bounds="parent" position={appendWmPositions[activeAppendIndex] || {x:0, y:0}}
+                                  onDrag={(e, data) => setAppendWmPositions(prev => { const newPos = [...prev]; newPos[activeAppendIndex] = {x: data.x, y: data.y}; return newPos; })}
+                                >
+                                  <div ref={appendDraggableRef} className="absolute top-0 left-0 cursor-move font-bold whitespace-nowrap p-2 hover:border-dashed hover:border-white/50"
+                                    style={{ color: wmColor, fontSize: `${wmSize}px`, opacity: wmOpacity, textShadow: '2px 2px 4px rgba(0,0,0,0.5)', zIndex: 20 }}>
+                                    {wmText}
+                                  </div>
+                                </Draggable>
+                              </>
+                            )}
+                          </div>
                         </div>
                       )}
-                      <button onClick={handleAppendUpload} disabled={isAppending} className={`w-full py-3 rounded text-white font-bold ${isAppending ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'}`}>
-                        {isAppending ? '추가 업로드 중...' : `${appendFiles.length}장 앨범에 등록하기 🚀`}
+                      <button onClick={handleAppendUpload} disabled={isAppending} className={`w-full py-3 rounded text-white font-bold text-lg shadow-md ${isAppending ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                        {isAppending ? '추가 업로드 중... ⏳' : `${appendFiles.length}장 앨범에 등록하기 🚀`}
                       </button>
                     </div>
                   )}
