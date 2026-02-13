@@ -12,16 +12,13 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [adminTab, setAdminTab] = useState('upload'); 
 
-  // --- 로그인 상태 ---
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
-  // --- 앨범 업로드 상태 ---
   const [albumTitle, setAlbumTitle] = useState('');
   const [isSecret, setIsSecret] = useState(false);
   const [albumPassword, setAlbumPassword] = useState('');
   
-  // ★ 사진 파일들을 누적해서 담을 배열 상태
   const [files, setFiles] = useState([]); 
   const [previewUrl, setPreviewUrl] = useState(null); 
   
@@ -29,7 +26,6 @@ export default function AdminPage() {
   const [shareData, setShareData] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  // --- 워터마크 상태 ---
   const [useWatermark, setUseWatermark] = useState(false);
   const [wmText, setWmText] = useState('Picturewrite by Juno.');
   const [wmColor, setWmColor] = useState('#ffffff');
@@ -40,11 +36,9 @@ export default function AdminPage() {
   const draggableRef = useRef(null); 
   const [presets, setPresets] = useState([]);
 
-  // --- 앨범 관리(삭제) 상태 ---
   const [albumsList, setAlbumsList] = useState([]);
   const [selectedAlbum, setSelectedAlbum] = useState(null); 
 
-  // --- 앱 설정 상태 ---
   const [siteSubtitle, setSiteSubtitle] = useState('');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
@@ -69,7 +63,6 @@ export default function AdminPage() {
     }
   }, [adminTab, user]);
 
-  // ★ 파일이 추가되거나 삭제될 때마다 워터마크 미리보기용 사진(첫 번째 사진) 업데이트
   useEffect(() => {
     if (files.length > 0) {
       const url = URL.createObjectURL(files[0]);
@@ -169,7 +162,6 @@ export default function AdminPage() {
     });
   };
 
-  // --- 사진 드래그 앤 드롭 및 누적 추가 로직 ---
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files.length > 0) processSelectedFiles(e.target.files);
   };
@@ -180,17 +172,24 @@ export default function AdminPage() {
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) processSelectedFiles(e.dataTransfer.files);
   };
   
-  // ★ 기존 파일에 새 파일을 덮어쓰지 않고 '추가(Append)' 합니다.
   const processSelectedFiles = (fileList) => {
     const newFiles = Array.from(fileList);
     setFiles(prevFiles => [...prevFiles, ...newFiles]);
   };
 
-  // ★ 업로드 대기 중인 개별 사진 삭제 함수
   const handleRemovePendingFile = (indexToRemove) => {
     setFiles(prevFiles => prevFiles.filter((_, index) => index !== indexToRemove));
   };
-  // ---------------------------------------------
+
+  // ★ 추가된 기능: 대소문자+숫자 랜덤 비밀번호 6자리 생성
+  const generateRandomPassword = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let randomPassword = '';
+    for (let i = 0; i < 6; i++) {
+      randomPassword += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setAlbumPassword(randomPassword);
+  };
 
   const handleDragStop = (e, data) => setWmPosition({ x: data.x, y: data.y });
   const savePreset = () => {
@@ -257,7 +256,6 @@ export default function AdminPage() {
       });
       setShareData({ id: docRef.id, title: albumTitle, password: isSecret ? albumPassword : null, url: window.location.origin });
       
-      // 업로드 완료 후 장바구니 비우기
       setFiles([]); 
       setAlbumTitle('');
       setAlbumPassword('');
@@ -314,7 +312,6 @@ export default function AdminPage() {
           </button>
         </div>
 
-        {/* ==================== 1. 업로드 탭 ==================== */}
         {adminTab === 'upload' && (
           <div className="animate-fade-in">
              {shareData && (
@@ -330,14 +327,35 @@ export default function AdminPage() {
             <form onSubmit={handleUpload} className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <input type="text" value={albumTitle} onChange={e => setAlbumTitle(e.target.value)} placeholder="앨범 제목 (예: 2026 졸업식)" className="p-3 border border-gray-300 rounded-lg w-full focus:ring-2 focus:ring-blue-500 outline-none" required />
-                <div className="flex items-center space-x-2 border border-gray-300 p-3 rounded-lg bg-gray-50">
+                
+                {/* ★ 이 부분이 수정되었습니다: 비밀 폴더 체크 시 비밀번호 입력 및 랜덤 생성 버튼 표시 */}
+                <div className="flex flex-col sm:flex-row sm:items-center space-y-2 sm:space-y-0 sm:space-x-2 border border-gray-300 p-3 rounded-lg bg-gray-50">
+                  <div className="flex items-center space-x-2">
                     <input type="checkbox" checked={isSecret} onChange={e => setIsSecret(e.target.checked)} className="w-5 h-5 text-blue-600"/>
-                    <span className="flex-1 font-medium text-gray-700">비밀 폴더</span>
-                    {isSecret && <input type="text" value={albumPassword} onChange={e => setAlbumPassword(e.target.value)} placeholder="비밀번호" className="border p-1 w-32 rounded text-sm"/>}
+                    <span className="font-medium text-gray-700 whitespace-nowrap">비밀 폴더</span>
+                  </div>
+                  {isSecret && (
+                    <div className="flex items-center flex-1 w-full gap-2">
+                      <input 
+                        type="text" 
+                        value={albumPassword} 
+                        onChange={e => setAlbumPassword(e.target.value)} 
+                        placeholder="비밀번호 입력" 
+                        className="border p-2 w-full rounded text-sm outline-none focus:border-blue-500"
+                      />
+                      <button 
+                        type="button" 
+                        onClick={generateRandomPassword}
+                        className="bg-gray-200 text-gray-700 px-3 py-2 rounded text-xs font-bold hover:bg-gray-300 transition-colors whitespace-nowrap"
+                        title="무작위 비밀번호 자동 생성"
+                      >
+                        랜덤 🎲
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* 드래그 앤 드롭 영역 */}
               <div 
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
@@ -355,7 +373,6 @@ export default function AdminPage() {
                 </label>
               </div>
 
-              {/* ★ 새로 추가된 영역: 업로드 대기 중인 썸네일 리스트 및 개별 삭제 */}
               {files.length > 0 && (
                 <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
                   <div className="flex justify-between items-end mb-3">
@@ -376,7 +393,6 @@ export default function AdminPage() {
                           alt={`preview-${index}`} 
                           className="w-full h-full object-cover" 
                         />
-                        {/* 호버 시 나타나는 빨간색 X 삭제 버튼 */}
                         <button 
                           type="button"
                           onClick={() => handleRemovePendingFile(index)}
@@ -391,7 +407,6 @@ export default function AdminPage() {
                 </div>
               )}
 
-              {/* 워터마크 설정 영역 */}
               {files.length > 0 && previewUrl && (
                 <div className="border rounded-lg p-4 bg-white shadow-sm">
                   <div className="flex justify-between items-center mb-4 pb-2 border-b">
