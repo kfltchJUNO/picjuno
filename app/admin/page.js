@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { auth, db, storage } from '../../lib/firebase';
 import { signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
-// ★ setDoc, getDoc 추가됨
 import { collection, addDoc, serverTimestamp, getDocs, query, orderBy, doc, deleteDoc, updateDoc, setDoc, getDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import Draggable from 'react-draggable';
@@ -11,7 +10,7 @@ import Draggable from 'react-draggable';
 export default function AdminPage() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [adminTab, setAdminTab] = useState('upload'); // 'upload', 'manage', 'settings'
+  const [adminTab, setAdminTab] = useState('upload'); 
 
   // --- 로그인 상태 ---
   const [email, setEmail] = useState('');
@@ -21,15 +20,18 @@ export default function AdminPage() {
   const [albumTitle, setAlbumTitle] = useState('');
   const [isSecret, setIsSecret] = useState(false);
   const [albumPassword, setAlbumPassword] = useState('');
-  const [files, setFiles] = useState([]);
+  
+  // ★ 사진 파일들을 누적해서 담을 배열 상태
+  const [files, setFiles] = useState([]); 
   const [previewUrl, setPreviewUrl] = useState(null); 
+  
   const [isUploading, setIsUploading] = useState(false);
   const [shareData, setShareData] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
 
   // --- 워터마크 상태 ---
   const [useWatermark, setUseWatermark] = useState(false);
-  const [wmText, setWmText] = useState('PicJuno');
+  const [wmText, setWmText] = useState('Picturewrite by Juno.');
   const [wmColor, setWmColor] = useState('#ffffff');
   const [wmSize, setWmSize] = useState(40);
   const [wmOpacity, setWmOpacity] = useState(0.8);
@@ -42,7 +44,7 @@ export default function AdminPage() {
   const [albumsList, setAlbumsList] = useState([]);
   const [selectedAlbum, setSelectedAlbum] = useState(null); 
 
-  // ★ --- 앱 설정 상태 ---
+  // --- 앱 설정 상태 ---
   const [siteSubtitle, setSiteSubtitle] = useState('');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
@@ -56,7 +58,6 @@ export default function AdminPage() {
     return () => unsubscribe();
   }, []);
 
-  // 탭 변경 시 데이터 불러오기
   useEffect(() => {
     if (user) {
       if (adminTab === 'manage') {
@@ -68,13 +69,23 @@ export default function AdminPage() {
     }
   }, [adminTab, user]);
 
+  // ★ 파일이 추가되거나 삭제될 때마다 워터마크 미리보기용 사진(첫 번째 사진) 업데이트
+  useEffect(() => {
+    if (files.length > 0) {
+      const url = URL.createObjectURL(files[0]);
+      setPreviewUrl(url);
+      return () => URL.revokeObjectURL(url);
+    } else {
+      setPreviewUrl(null);
+    }
+  }, [files]);
+
   const fetchAlbumsList = async () => {
     const q = query(collection(db, 'albums'), orderBy('createdAt', 'desc'));
     const snap = await getDocs(q);
     setAlbumsList(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
   };
 
-  // ★ 파이어베이스에서 기존 문구 불러오기
   const fetchSettings = async () => {
     try {
       const docRef = doc(db, 'settings', 'general');
@@ -82,22 +93,18 @@ export default function AdminPage() {
       if (docSnap.exists() && docSnap.data().subtitle) {
         setSiteSubtitle(docSnap.data().subtitle);
       } else {
-        setSiteSubtitle('Every Moment, Delivered.'); // 데이터가 없으면 기본값
+        setSiteSubtitle('Picturewrite by Juno.'); 
       }
     } catch (error) {
       console.error("Error fetching settings:", error);
     }
   };
 
-  // ★ 파이어베이스에 새 문구 저장하기
   const handleSaveSettings = async (e) => {
     e.preventDefault();
     setIsSavingSettings(true);
     try {
-      // merge: true는 다른 설정이 생겨도 덮어쓰지 않고 이 항목만 업데이트한다는 뜻입니다.
-      await setDoc(doc(db, 'settings', 'general'), {
-        subtitle: siteSubtitle
-      }, { merge: true });
+      await setDoc(doc(db, 'settings', 'general'), { subtitle: siteSubtitle }, { merge: true });
       alert('앱 설정이 성공적으로 저장되었습니다! 메인 화면에 즉시 반영됩니다.');
     } catch (error) {
       console.error("Error saving settings:", error);
@@ -116,7 +123,6 @@ export default function AdminPage() {
     }
   };
 
-  // (이하 앨범 삭제, 사진 삭제, 복사, 업로드, 드래그앤드롭 로직은 동일)
   const handleDeleteAlbum = async (albumId, photoUrls) => {
     if (!confirm('경고: 이 앨범과 내부의 모든 사진 파일이 영구적으로 삭제됩니다. 계속하시겠습니까?')) return;
     try {
@@ -163,6 +169,7 @@ export default function AdminPage() {
     });
   };
 
+  // --- 사진 드래그 앤 드롭 및 누적 추가 로직 ---
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files.length > 0) processSelectedFiles(e.target.files);
   };
@@ -172,11 +179,18 @@ export default function AdminPage() {
     e.preventDefault(); setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) processSelectedFiles(e.dataTransfer.files);
   };
+  
+  // ★ 기존 파일에 새 파일을 덮어쓰지 않고 '추가(Append)' 합니다.
   const processSelectedFiles = (fileList) => {
-    const selectedFiles = Array.from(fileList);
-    setFiles(selectedFiles);
-    setPreviewUrl(URL.createObjectURL(selectedFiles[0]));
+    const newFiles = Array.from(fileList);
+    setFiles(prevFiles => [...prevFiles, ...newFiles]);
   };
+
+  // ★ 업로드 대기 중인 개별 사진 삭제 함수
+  const handleRemovePendingFile = (indexToRemove) => {
+    setFiles(prevFiles => prevFiles.filter((_, index) => index !== indexToRemove));
+  };
+  // ---------------------------------------------
 
   const handleDragStop = (e, data) => setWmPosition({ x: data.x, y: data.y });
   const savePreset = () => {
@@ -242,7 +256,11 @@ export default function AdminPage() {
         createdAt: serverTimestamp(),
       });
       setShareData({ id: docRef.id, title: albumTitle, password: isSecret ? albumPassword : null, url: window.location.origin });
-      setFiles([]); setPreviewUrl(null); setAlbumTitle('');
+      
+      // 업로드 완료 후 장바구니 비우기
+      setFiles([]); 
+      setAlbumTitle('');
+      setAlbumPassword('');
       alert('완료되었습니다!');
     } catch (error) {
       console.error(error); alert('업로드 실패');
@@ -275,7 +293,6 @@ export default function AdminPage() {
           <button onClick={() => signOut(auth)} className="text-red-500 underline text-sm">로그아웃</button>
         </div>
 
-        {/* ★ 탭 메뉴 3개로 확장 */}
         <div className="flex flex-wrap gap-2 mb-8 bg-gray-100 p-1 rounded-lg w-fit">
           <button 
             onClick={() => setAdminTab('upload')} 
@@ -320,6 +337,7 @@ export default function AdminPage() {
                 </div>
               </div>
 
+              {/* 드래그 앤 드롭 영역 */}
               <div 
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
@@ -331,12 +349,49 @@ export default function AdminPage() {
                 <label htmlFor="fileInput" className="cursor-pointer flex flex-col items-center justify-center w-full h-full">
                   <span className="text-4xl mb-2">📷</span>
                   <span className="text-blue-600 font-bold hover:underline text-lg">
-                    {files.length > 0 ? `${files.length}장의 사진 선택됨` : "+ 사진 추가하기 (Drag & Drop)"}
+                    {files.length > 0 ? `현재 ${files.length}장 선택됨 (클릭하여 추가)` : "+ 사진 추가하기 (Drag & Drop)"}
                   </span>
-                  <span className="text-sm text-gray-400 mt-2">이곳에 폴더 안의 사진을 드래그해서 놓으세요</span>
+                  <span className="text-sm text-gray-400 mt-2">여러 번에 나누어 사진을 계속 추가할 수 있습니다.</span>
                 </label>
               </div>
 
+              {/* ★ 새로 추가된 영역: 업로드 대기 중인 썸네일 리스트 및 개별 삭제 */}
+              {files.length > 0 && (
+                <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                  <div className="flex justify-between items-end mb-3">
+                    <h3 className="font-bold text-gray-700">📸 선택된 사진 ({files.length}장)</h3>
+                    <button 
+                      type="button" 
+                      onClick={() => setFiles([])} 
+                      className="text-sm text-red-500 hover:text-red-700 underline"
+                    >
+                      전체 비우기
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-3 max-h-64 overflow-y-auto p-2 bg-white rounded border border-gray-100 shadow-inner">
+                    {files.map((file, index) => (
+                      <div key={index} className="relative w-20 h-20 group rounded-md overflow-hidden border border-gray-200 shadow-sm">
+                        <img 
+                          src={URL.createObjectURL(file)} 
+                          alt={`preview-${index}`} 
+                          className="w-full h-full object-cover" 
+                        />
+                        {/* 호버 시 나타나는 빨간색 X 삭제 버튼 */}
+                        <button 
+                          type="button"
+                          onClick={() => handleRemovePendingFile(index)}
+                          className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 shadow-md"
+                          title="이 사진 빼기"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 워터마크 설정 영역 */}
               {files.length > 0 && previewUrl && (
                 <div className="border rounded-lg p-4 bg-white shadow-sm">
                   <div className="flex justify-between items-center mb-4 pb-2 border-b">
@@ -381,7 +436,7 @@ export default function AdminPage() {
                   )}
                 </div>
               )}
-              <button type="submit" disabled={isUploading} className={`w-full py-4 rounded-lg text-white font-bold text-lg shadow-md ${isUploading ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'}`}>
+              <button type="submit" disabled={isUploading || files.length === 0} className={`w-full py-4 rounded-lg text-white font-bold text-lg shadow-md ${(isUploading || files.length === 0) ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'}`}>
                 {isUploading ? '업로드 및 처리 중... ⏳' : '업로드 시작 🚀'}
               </button>
             </form>
@@ -482,7 +537,7 @@ export default function AdminPage() {
               <h2 className="text-lg font-bold text-purple-900 mb-2">✨ 메인 화면 문구 변경</h2>
               <p className="text-sm text-purple-700 mb-4">
                 사용자가 앱에 접속했을 때 PicJuno 로고 아래에 보이는 소개 문구를 변경합니다.<br/>
-                예: "Every Moment, Delivered.", "2026학년도 3반 사진첩" 등
+                예: "Picturewrite by Juno.", "2026학년도 3반 사진첩" 등
               </p>
               
               <form onSubmit={handleSaveSettings} className="space-y-4">

@@ -9,18 +9,15 @@ import Image from 'next/image';
 export default function HomePage() {
   const router = useRouter();
   
-  // 상태 관리
   const [activeTab, setActiveTab] = useState('public');
   const [publicAlbums, setPublicAlbums] = useState([]);
   const [loading, setLoading] = useState(true);
   const [secretCode, setSecretCode] = useState('');
   const [searchLoading, setSearchLoading] = useState(false);
   
-  // 앱 기본 설정(문구) 상태
-  const [siteSubtitle, setSiteSubtitle] = useState('Every Moment, Delivered.');
+  const [siteSubtitle, setSiteSubtitle] = useState('Picturewrite by Juno.');
 
   useEffect(() => {
-    // 1. 파이어베이스에서 앱 설정(소개 문구) 불러오기
     const fetchSettings = async () => {
       try {
         const docRef = doc(db, 'settings', 'general');
@@ -34,7 +31,6 @@ export default function HomePage() {
       }
     };
 
-    // 2. 파이어베이스에서 공개 앨범 목록 불러오기
     const fetchPublicAlbums = async () => {
       try {
         const q = query(
@@ -60,7 +56,6 @@ export default function HomePage() {
     fetchPublicAlbums();
   }, []);
 
-  // 비밀번호 입력 처리 함수
   const handleSecretLogin = async (e) => {
     e.preventDefault();
     if (!secretCode) return;
@@ -89,7 +84,6 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen bg-white">
-      {/* 헤더 영역 */}
       <header className="pt-12 pb-8 px-6 text-center">
         <div className="flex justify-center items-center gap-3 mb-2">
           <div className="relative w-12 h-12 shadow-md rounded-xl overflow-hidden bg-gray-50">
@@ -105,13 +99,11 @@ export default function HomePage() {
             PicJuno
           </h1>
         </div>
-        {/* 관리자 페이지에서 설정한 문구가 뜨는 곳 */}
         <p className="text-gray-500 text-lg font-light break-keep">
           {siteSubtitle}
         </p>
       </header>
 
-      {/* 탭 버튼 영역 */}
       <div className="flex justify-center mb-10">
         <div className="bg-gray-100 p-1 rounded-full inline-flex">
           <button
@@ -137,10 +129,7 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* 메인 콘텐츠 영역 */}
       <main className="max-w-6xl mx-auto px-6 pb-20">
-        
-        {/* 1. 공개 갤러리 탭 */}
         {activeTab === 'public' && (
           <div>
             {loading ? (
@@ -191,7 +180,6 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* 2. 비밀 접속 탭 */}
         {activeTab === 'secret' && (
           <div className="flex flex-col items-center justify-center py-10">
             <div className="w-full max-w-md bg-gray-50 p-8 rounded-2xl border border-gray-100 text-center shadow-sm">
@@ -206,11 +194,12 @@ export default function HomePage() {
               </p>
               
               <form onSubmit={handleSecretLogin} className="space-y-4">
+                {/* ★ 이 부분이 수정되었습니다: placeholder 변경 */}
                 <input
                   type="text"
                   value={secretCode}
                   onChange={(e) => setSecretCode(e.target.value)}
-                  placeholder="예: Class26"
+                  placeholder="코드를 입력하세요"
                   className="w-full p-4 text-center text-lg border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all bg-white"
                 />
                 <button
@@ -226,7 +215,6 @@ export default function HomePage() {
         )}
       </main>
 
-      {/* 푸터 영역 */}
       <footer className="text-center text-gray-400 text-sm py-10 border-t border-gray-100 mt-10">
         &copy; {new Date().getFullYear()} PicJuno. All rights reserved.
       </footer>
