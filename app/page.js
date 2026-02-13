@@ -47,11 +47,13 @@ export default function HomePage() {
         where('password', '==', secretCode)
       );
       const querySnapshot = await getDocs(q);
+      
       if (querySnapshot.empty) {
-        alert('존재하지 않는 코드입니다.');
+        // ★ 이 부분이 수정되었습니다!
+        alert('존재하지 않는 코드이거나, 기간이 만료되어 삭제된 폴더입니다.');
       } else {
         const albumId = querySnapshot.docs[0].id;
-        router.push(`/album/${albumId}`);
+        router.push(`/album/${albumId}?code=${secretCode}`);
       }
     } catch (error) {
       console.error("Login error:", error);
